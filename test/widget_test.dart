@@ -5,7 +5,9 @@ import 'package:kadroskop/models/media_item.dart';
 import 'package:kadroskop/ui/kadroskop_app.dart';
 
 void main() {
-  testWidgets('shows adaptive home and opens recall flow', (tester) async {
+  testWidgets('shows adaptive home and opens text-first remember flow', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -16,13 +18,35 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Кадроскоп'), findsOneWidget);
-    expect(find.text('Для вас'), findsOneWidget);
+    expect(find.text('Популярное сейчас'), findsOneWidget);
     expect(find.text('Помоги вспомнить'), findsOneWidget);
 
     await tester.tap(find.text('Помоги вспомнить'));
     await tester.pumpAndSettle();
-    expect(find.text('Возможно, это оно?'), findsOneWidget);
-    expect(find.text('Смотрел'), findsOneWidget);
+    expect(find.text('Вспомнить'), findsWidgets);
+    expect(find.text('Опишите всё, что помните'), findsOneWidget);
+    expect(find.text('Найти произведение'), findsOneWidget);
+  });
+
+  testWidgets('category button opens search with the selected kind', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      KadroskopApp(repository: MemoryMediaRepository(_items)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Аниме').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Поиск'), findsWidgets);
+    final chip = tester.widget<ChoiceChip>(
+      find.widgetWithText(ChoiceChip, 'Аниме'),
+    );
+    expect(chip.selected, isTrue);
   });
 }
 

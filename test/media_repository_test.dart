@@ -10,6 +10,7 @@ void main() {
     await repository.setEpisodeWatched(series, 1, 1, true);
     var progress = await repository.loadEpisodeProgress(series.id);
     expect(progress, hasLength(1));
+    expect((await repository.loadMedia()).single.status, WatchStatus.watching);
 
     await repository.setAllEpisodesWatched(series, true);
     progress = await repository.loadEpisodeProgress(series.id);
@@ -18,6 +19,17 @@ void main() {
 
     await repository.setAllEpisodesWatched(series, false);
     expect(await repository.loadEpisodeProgress(series.id), isEmpty);
+    expect((await repository.loadMedia()).single.status, WatchStatus.planned);
+  });
+
+  test('stores a personal rating independently from catalog rating', () async {
+    final repository = MemoryMediaRepository([series]);
+
+    await repository.setRating(series, 9);
+
+    final saved = (await repository.loadMedia()).single;
+    expect(saved.userRating, 9);
+    expect(saved.rating, 8.2);
   });
 
   test('filters catalog by title and kind', () async {

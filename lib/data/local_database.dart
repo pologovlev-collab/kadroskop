@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -24,11 +25,11 @@ class LocalDatabase {
     final db = await factory.openDatabase(
       p.join(directory, 'kadroskop.db'),
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 5,
         onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
         onCreate: (database, version) async {
           await _createSchema(database);
-          await _seed(database);
+          if (_debugDemoDataEnabled) await _seed(database);
         },
         onUpgrade: (database, oldVersion, newVersion) async {
           if (oldVersion < 2) {
@@ -38,6 +39,15 @@ class LocalDatabase {
             await _createEpisodeProgress(database);
             await _hydrateSeedMetadata(database);
           }
+          if (oldVersion < 3 && !_debugDemoDataEnabled) {
+            await database.delete('media', where: "source = 'local'");
+          }
+          if (oldVersion < 4) {
+            await database.execute(
+              'ALTER TABLE user_media ADD COLUMN user_rating REAL',
+            );
+          }
+          if (oldVersion < 5) await _createProfileTable(database);
         },
       ),
     );
@@ -74,6 +84,7 @@ class LocalDatabase {
         status TEXT NOT NULL DEFAULT 'none',
         progress REAL NOT NULL DEFAULT 0,
         favorite INTEGER NOT NULL DEFAULT 0,
+        user_rating REAL,
         updated_at TEXT NOT NULL
       )
     ''');
@@ -86,7 +97,23 @@ class LocalDatabase {
       )
     ''');
     await _createEpisodeProgress(database);
+    await _createProfileTable(database);
   }
+
+  static Future<void> _createProfileTable(Database database) =>
+      database.execute('''
+        CREATE TABLE IF NOT EXISTS app_profile (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          name TEXT NOT NULL,
+          email TEXT NOT NULL DEFAULT '',
+          password_salt TEXT,
+          password_hash TEXT,
+          is_guest INTEGER NOT NULL DEFAULT 1,
+          favorite_genres TEXT NOT NULL DEFAULT '',
+          dark_theme INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL
+        )
+      ''');
 
   static Future<void> _createEpisodeProgress(Database database) =>
       database.execute('''
@@ -144,6 +171,12 @@ class LocalDatabase {
     await batch.commit(noResult: true);
   }
 }
+
+const _demoDataFlag = bool.fromEnvironment(
+  'KADROSKOP_DEBUG_DEMO_DATA',
+  defaultValue: false,
+);
+bool get _debugDemoDataEnabled => kDebugMode && _demoDataFlag;
 
 const _mediaV2Columns = [
   "ALTER TABLE media ADD COLUMN source TEXT NOT NULL DEFAULT 'local'",

@@ -3,28 +3,87 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../data/media_repository.dart';
+import '../models/app_profile.dart';
 import '../models/media_item.dart';
 import 'app_theme.dart';
+import 'pages/auth_page.dart';
+import 'pages/catalog_search_page.dart';
+import 'pages/home_page.dart';
+import 'pages/library_page.dart';
+import 'pages/profile_page.dart';
+import 'pages/remember_page.dart';
 import 'widgets/poster_card.dart';
 
-class KadroskopApp extends StatelessWidget {
+class KadroskopApp extends StatefulWidget {
   const KadroskopApp({super.key, required this.repository});
 
   final MediaRepository repository;
+
+  @override
+  State<KadroskopApp> createState() => _KadroskopAppState();
+}
+
+class _KadroskopAppState extends State<KadroskopApp> {
+  AppProfile? _profile;
+  bool _profileLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    final profile = await widget.repository.loadProfile();
+    if (mounted) {
+      setState(() {
+        _profile = profile;
+        _profileLoaded = true;
+      });
+    }
+  }
+
+  Future<void> _logout() async {
+    await widget.repository.logout();
+    if (mounted) setState(() => _profile = null);
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'Кадроскоп',
     debugShowCheckedModeBanner: false,
     theme: buildTheme(),
-    home: KadroskopShell(repository: repository),
+    darkTheme: buildTheme(brightness: Brightness.dark),
+    themeMode: _profile?.darkTheme == true ? ThemeMode.dark : ThemeMode.light,
+    home: !_profileLoaded
+        ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+        : _profile == null
+        ? AuthPage(
+            repository: widget.repository,
+            onAuthenticated: (profile) => setState(() => _profile = profile),
+          )
+        : KadroskopShell(
+            repository: widget.repository,
+            profile: _profile!,
+            onProfileChanged: (profile) => setState(() => _profile = profile),
+            onLogout: _logout,
+          ),
   );
 }
 
 class KadroskopShell extends StatefulWidget {
-  const KadroskopShell({super.key, required this.repository});
+  const KadroskopShell({
+    super.key,
+    required this.repository,
+    required this.profile,
+    required this.onProfileChanged,
+    required this.onLogout,
+  });
 
   final MediaRepository repository;
+  final AppProfile profile;
+  final ValueChanged<AppProfile> onProfileChanged;
+  final Future<void> Function() onLogout;
 
   @override
   State<KadroskopShell> createState() => _KadroskopShellState();
@@ -34,6 +93,10 @@ class _KadroskopShellState extends State<KadroskopShell> {
   int _index = 0;
   bool _loading = true;
   List<MediaItem> _items = const [];
+  List<MediaItem> _popularItems = const [];
+  bool _popularLoading = true;
+  String? _popularError;
+  MediaKind? _searchKind;
 
   static const _destinations = [
     (Icons.home_outlined, Icons.home_rounded, 'Главная'),
@@ -48,6 +111,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
   void initState() {
     super.initState();
     _reload();
+    _loadPopular();
   }
 
   Future<void> _reload() async {
@@ -60,8 +124,30 @@ class _KadroskopShellState extends State<KadroskopShell> {
     }
   }
 
+  Future<void> _loadPopular() async {
+    if (mounted) {
+      setState(() {
+        _popularLoading = true;
+        _popularError = null;
+      });
+    }
+    try {
+      final page = await widget.repository.loadPopular();
+      if (mounted) setState(() => _popularItems = page.items);
+    } catch (error) {
+      if (mounted) setState(() => _popularError = error.toString());
+    } finally {
+      if (mounted) setState(() => _popularLoading = false);
+    }
+  }
+
   Future<void> _setStatus(MediaItem item, WatchStatus status) async {
     await widget.repository.setStatus(item, status);
+    await _reload();
+  }
+
+  Future<void> _setRating(MediaItem item, double? rating) async {
+    await widget.repository.setRating(item, rating);
     await _reload();
   }
 
@@ -86,6 +172,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
           _setStatus(detailed, status);
         },
         onEpisodesChanged: _reload,
+        onRating: (rating) => _setRating(detailed, rating),
       ),
     );
   }
@@ -101,27 +188,44 @@ class _KadroskopShellState extends State<KadroskopShell> {
       builder: (context, constraints) {
         final desktop = constraints.maxWidth >= 900;
         final page = switch (_index) {
-          0 => _HomePage(
-            items: _items,
+          0 => HomePage(
+            savedItems: _items,
+            popularItems: _popularItems,
+            loadingPopular: _popularLoading,
+            popularError: _popularError,
             onOpen: _openDetails,
             onRecall: () => setState(() => _index = 2),
-            onSearch: () => setState(() => _index = 1),
+            onSearchKind: (kind) => setState(() {
+              _searchKind = kind;
+              _index = 1;
+            }),
             onLibrary: () => setState(() => _index = 3),
             onStatistics: () => setState(() => _index = 4),
+            onRetryPopular: _loadPopular,
           ),
-          1 => _SearchPage(
+          1 => CatalogSearchPage(
             repository: widget.repository,
-            initialItems: _items,
+            initialKind: _searchKind,
             onOpen: _openDetails,
           ),
-          2 => _RecallPage(
+          2 => RememberPage(
+            repository: widget.repository,
+            onOpen: _openDetails,
+          ),
+          3 => LibraryPage(
+            items: _items,
+            onOpen: _openDetails,
+            onSetStatus: _setStatus,
+          ),
+          4 => _StatisticsPage(items: _items, repository: widget.repository),
+          _ => ProfilePage(
             items: _items,
             repository: widget.repository,
-            onOpen: _openDetails,
+            profile: widget.profile,
+            onProfileChanged: widget.onProfileChanged,
+            onCollectionChanged: _reload,
+            onLogout: widget.onLogout,
           ),
-          3 => _LibraryPage(items: _items, onOpen: _openDetails),
-          4 => _StatisticsPage(items: _items, repository: widget.repository),
-          _ => _ProfilePage(items: _items),
         };
         return Scaffold(
           body: SafeArea(
@@ -341,40 +445,45 @@ class _PageFrame extends StatelessWidget {
             MediaQuery.sizeOf(context).width < 600 ? 18 : 34,
             0,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (MediaQuery.sizeOf(context).width < 900) ...[
-                const _Brand(),
-                const SizedBox(height: 28),
-              ],
-              if (title != null)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title!,
-                            style: Theme.of(context).textTheme.displaySmall,
-                          ),
-                          if (subtitle != null) ...[
-                            const SizedBox(height: 7),
-                            Text(
-                              subtitle!,
-                              style: Theme.of(context).textTheme.bodyLarge
-                                  ?.copyWith(color: AppColors.muted),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    ?trailing,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1500),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (MediaQuery.sizeOf(context).width < 900) ...[
+                    const _Brand(),
+                    const SizedBox(height: 28),
                   ],
-                ),
-            ],
+                  if (title != null)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title!,
+                                style: Theme.of(context).textTheme.displaySmall,
+                              ),
+                              if (subtitle != null) ...[
+                                const SizedBox(height: 7),
+                                Text(
+                                  subtitle!,
+                                  style: Theme.of(context).textTheme.bodyLarge
+                                      ?.copyWith(color: AppColors.muted),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        ?trailing,
+                      ],
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -385,12 +494,20 @@ class _PageFrame extends StatelessWidget {
           MediaQuery.sizeOf(context).width < 600 ? 18 : 34,
           40,
         ),
-        sliver: SliverToBoxAdapter(child: child),
+        sliver: SliverToBoxAdapter(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1500),
+              child: child,
+            ),
+          ),
+        ),
       ),
     ],
   );
 }
 
+// ignore: unused_element
 class _HomePage extends StatelessWidget {
   const _HomePage({
     required this.items,
@@ -1104,6 +1221,7 @@ class _ReactionButton extends StatelessWidget {
   );
 }
 
+// ignore: unused_element
 class _LibraryPage extends StatelessWidget {
   const _LibraryPage({required this.items, required this.onOpen});
   final List<MediaItem> items;
@@ -1186,11 +1304,18 @@ class _StatisticsPageState extends State<_StatisticsPage> {
   String? selectedGenre;
   bool onlyWatched = true;
   Map<int, int> watchedEpisodes = const {};
+  Map<String, int> activityByMonth = const {};
 
   @override
   void initState() {
     super.initState();
     _loadEpisodeCounts();
+  }
+
+  @override
+  void didUpdateWidget(covariant _StatisticsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.items != widget.items) _loadEpisodeCounts();
   }
 
   Future<void> _loadEpisodeCounts() async {
@@ -1204,7 +1329,13 @@ class _StatisticsPageState extends State<_StatisticsPage> {
         );
       }),
     );
-    if (mounted) setState(() => watchedEpisodes = Map.fromEntries(entries));
+    final activity = await widget.repository.loadActivityByMonth();
+    if (mounted) {
+      setState(() {
+        watchedEpisodes = Map.fromEntries(entries);
+        activityByMonth = activity;
+      });
+    }
   }
 
   @override
@@ -1232,10 +1363,19 @@ class _StatisticsPageState extends State<_StatisticsPage> {
           : item.episodeCount;
       return sum + count * item.episodeRuntimeMinutes;
     });
-    final average = filtered.isEmpty
-        ? 0.0
-        : filtered.fold<double>(0, (sum, item) => sum + item.rating) /
-              filtered.length;
+    final rated = filtered.where((item) => item.userRating != null).toList();
+    final average = rated.isEmpty
+        ? null
+        : rated.fold<double>(0, (sum, item) => sum + item.userRating!) /
+              rated.length;
+    final films = filtered.where((item) => item.kind == MediaKind.movie).length;
+    final series = filtered
+        .where(
+          (item) =>
+              item.kind == MediaKind.series ||
+              item.kind == MediaKind.animatedSeries,
+        )
+        .length;
 
     return _PageFrame(
       title: 'Статистика коллекции',
@@ -1255,7 +1395,11 @@ class _StatisticsPageState extends State<_StatisticsPage> {
           const SizedBox(height: 22),
           LayoutBuilder(
             builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 920 ? 4 : 2;
+              final columns = constraints.maxWidth >= 920
+                  ? 4
+                  : constraints.maxWidth >= 520
+                  ? 2
+                  : 1;
               final width =
                   (constraints.maxWidth - 14 * (columns - 1)) / columns;
               return Wrap(
@@ -1267,6 +1411,18 @@ class _StatisticsPageState extends State<_StatisticsPage> {
                     icon: Icons.check_circle_outline,
                     value: '${filtered.length}',
                     label: 'произведений',
+                  ),
+                  _MetricCard(
+                    width: width,
+                    icon: Icons.movie_outlined,
+                    value: '$films',
+                    label: 'фильмов',
+                  ),
+                  _MetricCard(
+                    width: width,
+                    icon: Icons.live_tv_outlined,
+                    value: '$series',
+                    label: 'сериалов',
                   ),
                   _MetricCard(
                     width: width,
@@ -1283,8 +1439,8 @@ class _StatisticsPageState extends State<_StatisticsPage> {
                   _MetricCard(
                     width: width,
                     icon: Icons.star_outline_rounded,
-                    value: average.toStringAsFixed(1),
-                    label: 'средний рейтинг',
+                    value: average?.toStringAsFixed(1) ?? '—',
+                    label: 'средняя ваша оценка',
                   ),
                 ],
               );
@@ -1298,6 +1454,7 @@ class _StatisticsPageState extends State<_StatisticsPage> {
                   kind: filtered.where((item) => item.kind == kind).length,
               };
               final genreCounts = <String, int>{};
+              final yearCounts = <String, int>{};
               for (final item in filtered) {
                 for (final genre in item.genres) {
                   genreCounts.update(
@@ -1306,27 +1463,34 @@ class _StatisticsPageState extends State<_StatisticsPage> {
                     ifAbsent: () => 1,
                   );
                 }
+                if (item.year > 0) {
+                  final decade = '${item.year ~/ 10 * 10}-е';
+                  yearCounts.update(
+                    decade,
+                    (value) => value + 1,
+                    ifAbsent: () => 1,
+                  );
+                }
               }
               final cards = [
                 _KindBars(values: kinds),
                 _GenreChart(values: genreCounts),
+                _SimpleBars(title: 'По годам', values: yearCounts),
+                _SimpleBars(
+                  title: 'Активность по месяцам',
+                  values: activityByMonth,
+                ),
               ];
-              return constraints.maxWidth < 760
-                  ? Column(
-                      children: [
-                        cards[0],
-                        const SizedBox(height: 14),
-                        cards[1],
-                      ],
-                    )
-                  : Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: cards[0]),
-                        const SizedBox(width: 14),
-                        Expanded(child: cards[1]),
-                      ],
-                    );
+              final columns = constraints.maxWidth < 760 ? 1 : 2;
+              final width =
+                  (constraints.maxWidth - 14 * (columns - 1)) / columns;
+              return Wrap(
+                spacing: 14,
+                runSpacing: 14,
+                children: [
+                  for (final card in cards) SizedBox(width: width, child: card),
+                ],
+              );
             },
           ),
         ],
@@ -1537,6 +1701,62 @@ class _GenreChart extends StatelessWidget {
   }
 }
 
+class _SimpleBars extends StatelessWidget {
+  const _SimpleBars({required this.title, required this.values});
+  final String title;
+  final Map<String, int> values;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = values.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final shown = entries.length > 8
+        ? entries.sublist(entries.length - 8)
+        : entries;
+    final maximum = shown.fold<int>(
+      1,
+      (max, entry) => entry.value > max ? entry.value : max,
+    );
+    return _ChartCard(
+      title: title,
+      child: shown.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(
+                child: Text(
+                  'Пока недостаточно данных',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ),
+            )
+          : Column(
+              children: [
+                for (final entry in shown) ...[
+                  Row(
+                    children: [
+                      Expanded(child: Text(entry.key)),
+                      Text(
+                        '${entry.value}',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  LinearProgressIndicator(
+                    value: entry.value / maximum,
+                    minHeight: 8,
+                    borderRadius: BorderRadius.circular(20),
+                    backgroundColor: AppColors.border,
+                    color: AppColors.accent,
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
 class _ChartCard extends StatelessWidget {
   const _ChartCard({required this.title, required this.child});
   final String title;
@@ -1624,6 +1844,7 @@ const _chartColors = [
   Color(0xFF3285A8),
 ];
 
+// ignore: unused_element
 class _ProfilePage extends StatelessWidget {
   const _ProfilePage({required this.items});
   final List<MediaItem> items;
@@ -1833,6 +2054,44 @@ void _showInfo(BuildContext context, String title, String text) {
   );
 }
 
+Future<void> _showRatingDialog(
+  BuildContext context,
+  double? current,
+  Future<void> Function(double? rating) onRating,
+) async {
+  final rating = await showDialog<double?>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Ваша оценка'),
+      content: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (var value = 1; value <= 10; value++)
+            ChoiceChip(
+              label: Text('$value'),
+              selected: current?.round() == value,
+              onSelected: (_) => Navigator.pop(context, value.toDouble()),
+            ),
+        ],
+      ),
+      actions: [
+        if (current != null)
+          TextButton(
+            onPressed: () => Navigator.pop(context, 0.0),
+            child: const Text('Удалить оценку'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+      ],
+    ),
+  );
+  if (rating == null) return;
+  await onRating(rating == 0 ? null : rating);
+}
+
 class _EmptyState extends StatelessWidget {
   const _EmptyState({
     required this.icon,
@@ -1873,11 +2132,13 @@ class _DetailsSheet extends StatelessWidget {
     required this.repository,
     required this.onStatus,
     required this.onEpisodesChanged,
+    required this.onRating,
   });
   final MediaItem item;
   final MediaRepository repository;
   final ValueChanged<WatchStatus> onStatus;
   final Future<void> Function() onEpisodesChanged;
+  final Future<void> Function(double? rating) onRating;
 
   @override
   Widget build(BuildContext context) {
@@ -2010,6 +2271,25 @@ class _DetailsSheet extends StatelessWidget {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(14),
                               ),
+                            ),
+                          ),
+                          if (item.isEpisodic)
+                            OutlinedButton.icon(
+                              onPressed: () => onStatus(WatchStatus.watching),
+                              icon: const Icon(Icons.playlist_play_rounded),
+                              label: const Text('Смотрю'),
+                            ),
+                          OutlinedButton.icon(
+                            onPressed: () => _showRatingDialog(
+                              context,
+                              item.userRating,
+                              onRating,
+                            ),
+                            icon: const Icon(Icons.star_outline_rounded),
+                            label: Text(
+                              item.userRating == null
+                                  ? 'Оценить'
+                                  : 'Моя оценка ${item.userRating!.toStringAsFixed(0)}',
                             ),
                           ),
                         ],

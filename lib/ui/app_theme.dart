@@ -11,16 +11,17 @@ abstract final class AppColors {
   static const butter = Color(0xFFF3D37A);
 }
 
-ThemeData buildTheme() {
+ThemeData buildTheme({Brightness brightness = Brightness.light}) {
+  final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
     seedColor: AppColors.accent,
-    brightness: Brightness.light,
-    surface: AppColors.surface,
+    brightness: brightness,
+    surface: dark ? const Color(0xFF18201F) : AppColors.surface,
   );
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    scaffoldBackgroundColor: AppColors.canvas,
+    scaffoldBackgroundColor: dark ? const Color(0xFF101615) : AppColors.canvas,
     fontFamily: 'Segoe UI',
     fontFamilyFallback: const ['Roboto', 'Arial'],
     textTheme: const TextTheme(
@@ -53,8 +54,8 @@ ThemeData buildTheme() {
         height: 1.25,
         fontWeight: FontWeight.w700,
       ),
-      bodyLarge: TextStyle(fontSize: 16, height: 1.5, color: AppColors.ink),
-      bodyMedium: TextStyle(fontSize: 14, height: 1.45, color: AppColors.ink),
+      bodyLarge: TextStyle(fontSize: 16, height: 1.5),
+      bodyMedium: TextStyle(fontSize: 14, height: 1.45),
       labelLarge: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -68,7 +69,7 @@ ThemeData buildTheme() {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: Colors.white,
+      fillColor: dark ? const Color(0xFF1B2422) : Colors.white,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(16),
         borderSide: const BorderSide(color: AppColors.border),

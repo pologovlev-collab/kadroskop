@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 enum MediaKind { movie, series, anime, cartoon, animatedSeries, documentary }
 
-enum WatchStatus { none, planned, watched }
+enum WatchStatus { none, planned, watching, watched, dropped }
 
 class MediaItem {
   const MediaItem({
@@ -26,6 +26,7 @@ class MediaItem {
     this.episodeRuntimeMinutes = 0,
     this.seasons = const [],
     this.status = WatchStatus.none,
+    this.userRating,
   });
 
   final int id;
@@ -46,6 +47,7 @@ class MediaItem {
   final int episodeRuntimeMinutes;
   final List<SeasonInfo> seasons;
   final WatchStatus status;
+  final double? userRating;
 
   bool get isEpisodic =>
       kind == MediaKind.series ||
@@ -55,7 +57,7 @@ class MediaItem {
   int get totalRuntimeMinutes =>
       isEpisodic ? episodeCount * episodeRuntimeMinutes : runtimeMinutes;
 
-  MediaItem copyWith({WatchStatus? status}) => MediaItem(
+  MediaItem copyWith({WatchStatus? status, double? userRating}) => MediaItem(
     id: id,
     title: title,
     subtitle: subtitle,
@@ -74,6 +76,7 @@ class MediaItem {
     episodeRuntimeMinutes: episodeRuntimeMinutes,
     seasons: seasons,
     status: status ?? this.status,
+    userRating: userRating ?? this.userRating,
   );
 
   factory MediaItem.fromMap(Map<String, Object?> map) => MediaItem(
@@ -107,6 +110,7 @@ class MediaItem {
       (value) => value.name == map['status'],
       orElse: () => WatchStatus.none,
     ),
+    userRating: (map['user_rating'] as num?)?.toDouble(),
   );
 
   factory MediaItem.fromApi(Map<String, dynamic> json) {
@@ -234,5 +238,15 @@ extension MediaKindLabel on MediaKind {
     MediaKind.cartoon => Icons.cruelty_free_outlined,
     MediaKind.animatedSeries => Icons.animation_outlined,
     MediaKind.documentary => Icons.video_camera_back_outlined,
+  };
+}
+
+extension WatchStatusLabel on WatchStatus {
+  String get label => switch (this) {
+    WatchStatus.none => 'Не добавлено',
+    WatchStatus.planned => 'В планах',
+    WatchStatus.watching => 'Смотрю',
+    WatchStatus.watched => 'Просмотрено',
+    WatchStatus.dropped => 'Брошено',
   };
 }
