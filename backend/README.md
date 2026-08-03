@@ -6,12 +6,14 @@ Flutter-приложении, нормализует ответы двух ка�
 
 ## Настройка
 
-Получите TMDB API Read Access Token и запустите сервер:
+Получите TMDB API Read Access Token, скопируйте `.env.example` в `.env`, вставьте
+токен и запустите сервер:
 
 ```powershell
 cd backend
 dart pub get
-$env:TMDB_ACCESS_TOKEN='ваш_токен'
+Copy-Item .env.example .env
+# Откройте .env и замените значение TMDB_ACCESS_TOKEN
 dart run bin/server.dart
 ```
 

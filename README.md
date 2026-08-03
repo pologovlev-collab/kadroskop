@@ -23,7 +23,8 @@
 ```powershell
 cd backend
 dart pub get
-$env:TMDB_ACCESS_TOKEN='ваш TMDB API Read Access Token'
+Copy-Item .env.example .env
+# Откройте backend/.env и вставьте TMDB API Read Access Token
 dart run bin/server.dart
 ```
 
