@@ -4,17 +4,13 @@ import 'package:kadroskop_backend/kadroskop_server.dart';
 
 Future<void> main() async {
   final localEnvironment = await _readLocalEnvironment();
-  final port =
-      int.tryParse(
-        Platform.environment['PORT'] ?? localEnvironment['PORT'] ?? '',
-      ) ??
-      8080;
+  final environment = {...localEnvironment, ...Platform.environment};
+  final port = int.tryParse(environment['PORT'] ?? '') ?? 8080;
   final server = await startKadroskopServer(
     address: InternetAddress.anyIPv4,
     port: port,
-    tmdbToken:
-        Platform.environment['TMDB_ACCESS_TOKEN'] ??
-        localEnvironment['TMDB_ACCESS_TOKEN'],
+    tmdbToken: environment['TMDB_ACCESS_TOKEN'],
+    aiSettings: AiSettings.fromEnvironment(environment),
   );
   stdout.writeln(
     'Kadroskop backend: http://${server.address.host}:${server.port}',

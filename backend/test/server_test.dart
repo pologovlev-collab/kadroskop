@@ -104,4 +104,72 @@ void main() {
       );
     },
   );
+
+  test('POST /remember/search returns only verified candidates', () async {
+    final catalog = CatalogGateway(
+      MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'data': {
+              'Page': {
+                'media': [
+                  {
+                    'id': 42,
+                    'title': {
+                      'romaji': 'Verified Work',
+                      'english': 'Verified Work',
+                      'native': 'Verified Work',
+                    },
+                    'description': 'Teenagers travel through portals.',
+                    'startDate': {'year': 2004},
+                    'countryOfOrigin': 'JP',
+                    'format': 'TV',
+                    'episodes': 12,
+                    'duration': 24,
+                    'averageScore': 80,
+                    'popularity': 100,
+                    'genres': ['Sci-Fi'],
+                    'tags': const [],
+                    'coverImage': {
+                      'large': 'https://example.test/verified.jpg',
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }),
+    );
+    final parser = createAiQueryParser(
+      AiSettings.fromEnvironment(const {'AI_PROVIDER': 'none'}),
+    );
+    final server = await startKadroskopServer(
+      address: InternetAddress.loopbackIPv4,
+      port: 0,
+      catalogGateway: catalog,
+      aiParser: parser,
+      aiIntentCache: MemoryAiIntentCache(),
+    );
+    addTearDown(() => server.close(force: true));
+
+    final response = await http.post(
+      Uri.parse('http://127.0.0.1:${server.port}/remember/search'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({
+        'query':
+            'Мультсериал из 2000-х про подростков, порталы и механических существ',
+      }),
+    );
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final results = body['results'] as List<dynamic>;
+
+    expect(response.statusCode, 200);
+    expect(results, hasLength(1));
+    expect((results.single as Map<String, dynamic>)['source'], 'anilist');
+    expect((results.single as Map<String, dynamic>)['title'], 'Verified Work');
+    expect(body.toString(), isNot(contains('Дождь на стекле')));
+  });
 }

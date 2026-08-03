@@ -124,6 +124,75 @@ class CatalogGateway {
     return value;
   }
 
+  Future<CatalogSearchPage> discover({
+    required List<String> workTypes,
+    int? yearFrom,
+    int? yearTo,
+    List<String> genres = const [],
+    List<String> plotKeywords = const [],
+    List<String> countries = const [],
+    int page = 1,
+  }) async {
+    final safePage = _safePage(page);
+    final types = workTypes.toSet();
+    final includeEverything = types.isEmpty;
+    final includeMovies =
+        includeEverything ||
+        types.any(const {'movie', 'cartoon', 'documentary'}.contains);
+    final includeTv =
+        includeEverything ||
+        types.any(const {'series', 'animated_series'}.contains);
+    final includeAnime = includeEverything || types.contains('anime');
+    final operations = <_ProviderOperation>[
+      if (tmdbConfigured && includeMovies)
+        _ProviderOperation(
+          'tmdb',
+          () => _discoverTmdb(
+            'movie',
+            workTypes: workTypes,
+            yearFrom: yearFrom,
+            yearTo: yearTo,
+            genres: genres,
+            plotKeywords: plotKeywords,
+            countries: countries,
+            page: safePage,
+          ),
+        ),
+      if (tmdbConfigured && includeTv)
+        _ProviderOperation(
+          'tmdb',
+          () => _discoverTmdb(
+            'tv',
+            workTypes: workTypes,
+            yearFrom: yearFrom,
+            yearTo: yearTo,
+            genres: genres,
+            plotKeywords: plotKeywords,
+            countries: countries,
+            page: safePage,
+          ),
+        ),
+      if (includeAnime)
+        _ProviderOperation(
+          'anilist',
+          () => _discoverAniList(
+            yearFrom: yearFrom,
+            yearTo: yearTo,
+            genres: genres,
+            countries: countries,
+            page: safePage,
+          ),
+        ),
+    ];
+    if (operations.isEmpty) {
+      throw CatalogException(
+        'Для выбранных типов нужен TMDB_ACCESS_TOKEN в backend/.env.',
+        503,
+      );
+    }
+    return _runOperations(operations, kind: null, page: safePage);
+  }
+
   Future<CatalogSearchPage> _runOperations(
     List<_ProviderOperation> operations, {
     required String? kind,
@@ -186,9 +255,9 @@ class CatalogGateway {
           '${_providerLabel(operation.provider)} недоступен: ${_shortNetworkError(error.message)}';
       _recordFailure(operation.provider, message);
       return _SettledOperation(error: message);
-    } catch (_) {
+    } catch (error) {
       final message =
-          '${_providerLabel(operation.provider)} временно недоступен.';
+          '${_providerLabel(operation.provider)} временно недоступен (${error.runtimeType}).';
       _recordFailure(operation.provider, message);
       return _SettledOperation(error: message);
     }
@@ -240,6 +309,82 @@ class CatalogGateway {
       'page': '$page',
     });
     return _mapTmdbResults(await _getTmdb(uri), type);
+  }
+
+  Future<List<Map<String, Object?>>> _discoverTmdb(
+    String type, {
+    required List<String> workTypes,
+    required int? yearFrom,
+    required int? yearTo,
+    required List<String> genres,
+    required List<String> plotKeywords,
+    required List<String> countries,
+    required int page,
+  }) async {
+    final genreIds = genres
+        .map((genre) => _tmdbGenreNames[genre.toLowerCase()])
+        .whereType<int>()
+        .toSet();
+    if (workTypes.contains('cartoon') ||
+        workTypes.contains('animated_series')) {
+      genreIds.add(16);
+    }
+    if (workTypes.contains('documentary')) genreIds.add(99);
+    final keywordIds = await _tmdbKeywordIds(plotKeywords.take(4));
+    final countryCodes = countries
+        .map((country) => _countryCodes[country.toLowerCase()])
+        .whereType<String>()
+        .toSet();
+    final dateField = type == 'tv' ? 'first_air_date' : 'primary_release_date';
+    final parameters = <String, String>{
+      'language': 'ru-RU',
+      'include_adult': 'false',
+      'sort_by': 'popularity.desc',
+      'page': '$page',
+      if (yearFrom != null) '$dateField.gte': '$yearFrom-01-01',
+      if (yearTo != null) '$dateField.lte': '$yearTo-12-31',
+      if (genreIds.isNotEmpty) 'with_genres': genreIds.join(','),
+      if (keywordIds.isNotEmpty) 'with_keywords': keywordIds.join('|'),
+      if (countryCodes.isNotEmpty)
+        'with_origin_country': countryCodes.join('|'),
+    };
+    final uri = Uri.https(
+      'api.themoviedb.org',
+      '/3/discover/$type',
+      parameters,
+    );
+    return _mapTmdbResults(await _getTmdb(uri), type);
+  }
+
+  Future<List<int>> _tmdbKeywordIds(Iterable<String> keywords) async {
+    final normalized = keywords
+        .map((value) => value.trim().toLowerCase())
+        .where((value) => value.length >= 3)
+        .toSet()
+        .toList();
+    final ids = <int>[];
+    for (final keyword in normalized) {
+      final cacheKey = 'tmdb-keyword:$keyword';
+      final cached = _cache.read<int>(cacheKey);
+      if (cached != null) {
+        ids.add(cached);
+        continue;
+      }
+      final uri = Uri.https('api.themoviedb.org', '/3/search/keyword', {
+        'query': keyword,
+        'page': '1',
+      });
+      final data = await _getTmdb(uri);
+      final results = (data['results'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>();
+      if (results.isEmpty) continue;
+      final id = (results.first['id'] as num?)?.toInt();
+      if (id != null) {
+        ids.add(id);
+        _cache.write(cacheKey, id, ttl: const Duration(hours: 12));
+      }
+    }
+    return ids;
   }
 
   List<Map<String, Object?>> _mapTmdbResults(
@@ -386,6 +531,32 @@ class CatalogGateway {
     return _aniListMedia(response).map(_mapAniList).toList();
   }
 
+  Future<List<Map<String, Object?>>> _discoverAniList({
+    required int? yearFrom,
+    required int? yearTo,
+    required List<String> genres,
+    required List<String> countries,
+    required int page,
+  }) async {
+    final supportedGenres = genres
+        .map((genre) => _aniListGenres[genre.toLowerCase()])
+        .whereType<String>()
+        .toSet()
+        .toList();
+    final countryCodes = countries
+        .map((value) => _countryCodes[value.toLowerCase()])
+        .whereType<String>()
+        .toList();
+    final response = await _postAniList(_aniListDiscoverQuery, {
+      'page': page,
+      if (yearFrom != null) 'startFrom': yearFrom * 10000 + 101,
+      if (yearTo != null) 'startTo': yearTo * 10000 + 1231,
+      if (supportedGenres.isNotEmpty) 'genres': supportedGenres,
+      if (countryCodes.isNotEmpty) 'country': countryCodes.first,
+    });
+    return _aniListMedia(response).map(_mapAniList).toList();
+  }
+
   Iterable<Map<String, dynamic>> _aniListMedia(Map<String, dynamic> response) {
     final data = response['data'] as Map<String, dynamic>? ?? const {};
     final page = data['Page'] as Map<String, dynamic>? ?? const {};
@@ -407,7 +578,7 @@ class CatalogGateway {
 
   Future<Map<String, dynamic>> _postAniList(
     String query,
-    Map<String, Object> variables,
+    Map<String, Object?> variables,
   ) async {
     final response = await _client
         .post(
@@ -466,6 +637,12 @@ class CatalogGateway {
       ],
       'originalLanguage': row['countryOfOrigin'] as String?,
       'format': format,
+      'tags': (row['tags'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map((tag) => tag['name'])
+          .whereType<String>()
+          .take(12)
+          .toList(),
     };
   }
 }
@@ -640,6 +817,53 @@ const _tmdbGenres = <int, String>{
   10765: 'Фантастика и фэнтези',
 };
 
+const _tmdbGenreNames = <String, int>{
+  'action': 28,
+  'adventure': 12,
+  'animation': 16,
+  'comedy': 35,
+  'crime': 80,
+  'documentary': 99,
+  'drama': 18,
+  'family': 10751,
+  'fantasy': 14,
+  'history': 36,
+  'horror': 27,
+  'mystery': 9648,
+  'romance': 10749,
+  'science fiction': 878,
+  'thriller': 53,
+  'western': 37,
+};
+
+const _aniListGenres = <String, String>{
+  'action': 'Action',
+  'adventure': 'Adventure',
+  'comedy': 'Comedy',
+  'drama': 'Drama',
+  'fantasy': 'Fantasy',
+  'horror': 'Horror',
+  'mystery': 'Mystery',
+  'romance': 'Romance',
+  'science fiction': 'Sci-Fi',
+  'sports': 'Sports',
+  'supernatural': 'Supernatural',
+};
+
+const _countryCodes = <String, String>{
+  'japan': 'JP',
+  'япония': 'JP',
+  'united states': 'US',
+  'сша': 'US',
+  'russia': 'RU',
+  'россия': 'RU',
+  'france': 'FR',
+  'франция': 'FR',
+  'united kingdom': 'GB',
+  'south korea': 'KR',
+  'china': 'CN',
+};
+
 const _aniListFields = r'''
   id
   title { romaji english native }
@@ -652,6 +876,7 @@ const _aniListFields = r'''
   averageScore
   popularity
   genres
+  tags { name rank }
   coverImage { large extraLarge }
 ''';
 
@@ -671,6 +896,31 @@ const _aniListPopularQuery =
 query PopularAnime(\$page: Int!) {
   Page(page: \$page, perPage: 20) {
     media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
+      $_aniListFields
+    }
+  }
+}
+''';
+
+const _aniListDiscoverQuery =
+    '''
+query DiscoverAnime(
+  \$page: Int!,
+  \$startFrom: FuzzyDateInt,
+  \$startTo: FuzzyDateInt,
+  \$genres: [String],
+  \$country: CountryCode
+) {
+  Page(page: \$page, perPage: 20) {
+    media(
+      type: ANIME,
+      sort: POPULARITY_DESC,
+      isAdult: false,
+      startDate_greater: \$startFrom,
+      startDate_lesser: \$startTo,
+      genre_in: \$genres,
+      countryOfOrigin: \$country
+    ) {
       $_aniListFields
     }
   }

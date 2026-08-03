@@ -8,23 +8,55 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 
 import 'catalog_gateway.dart';
+import 'ai_intent_cache.dart';
+import 'ai_query_parser.dart';
+import 'remember_models.dart';
+import 'remember_search_service.dart';
 
 export 'catalog_gateway.dart';
+export 'ai_intent_cache.dart';
+export 'ai_query_parser.dart';
+export 'remember_models.dart';
+export 'remember_search_service.dart';
 
 Future<HttpServer> startKadroskopServer({
   required InternetAddress address,
   required int port,
   String? tmdbToken,
   CatalogGateway? catalogGateway,
+  AiSettings? aiSettings,
+  AiParserController? aiParser,
+  AiIntentCache? aiIntentCache,
+  RememberSearchService? rememberSearchService,
+  String aiCachePath = 'data/kadroskop_backend.db',
 }) {
   final catalog =
       catalogGateway ?? CatalogGateway(http.Client(), tmdbToken: tmdbToken);
+  final settings =
+      aiSettings ?? AiSettings.fromEnvironment(const {'AI_ENABLED': 'false'});
+  final parser = aiParser ?? createAiQueryParser(settings);
+  final intentCache =
+      aiIntentCache ??
+      (aiSettings == null
+          ? MemoryAiIntentCache()
+          : SqliteAiIntentCache(
+              path: aiCachePath,
+              ttl: Duration(hours: settings.cacheHours),
+            ));
+  final remember =
+      rememberSearchService ??
+      RememberSearchService(
+        catalog: catalog,
+        parser: parser,
+        cache: intentCache,
+      );
   final router = Router()
     ..get('/v1/health', (Request request) {
       return _json({
         'ok': true,
         'backend': {'status': 'connected'},
         'providers': catalog.diagnostics,
+        'ai': remember.diagnostics(),
       });
     })
     ..get('/v1/search', (Request request) async {
@@ -63,6 +95,35 @@ Future<HttpServer> startKadroskopServer({
     ) async {
       try {
         return _json(await catalog.details(source, id));
+      } on CatalogException catch (error) {
+        return _json({'error': error.message}, statusCode: error.statusCode);
+      }
+    })
+    ..post('/remember/search', (Request request) async {
+      try {
+        final body = await request.readAsString();
+        if (body.length > settings.maxInputLength + 4000) {
+          throw const RememberValidationException('Запрос слишком большой.');
+        }
+        final decoded = jsonDecode(body);
+        if (decoded is! Map) {
+          throw const RememberValidationException(
+            'Тело запроса должно быть JSON-объектом.',
+          );
+        }
+        final searchRequest = RememberSearchRequest.fromJson(
+          decoded.cast<String, dynamic>(),
+          maxInputLength: settings.maxInputLength,
+        );
+        return _json(await remember.search(searchRequest));
+      } on FormatException {
+        return _json({
+          'error': 'Тело запроса содержит некорректный JSON.',
+        }, statusCode: HttpStatus.badRequest);
+      } on RememberValidationException catch (error) {
+        return _json({
+          'error': error.message,
+        }, statusCode: HttpStatus.badRequest);
       } on CatalogException catch (error) {
         return _json({'error': error.message}, statusCode: error.statusCode);
       }
