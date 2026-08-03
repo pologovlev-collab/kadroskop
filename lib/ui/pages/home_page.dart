@@ -205,7 +205,7 @@ class _Kinds extends StatelessWidget {
               onPressed: () => onSelected(kind),
               avatar: Icon(kind.icon, size: 18),
               label: Text(kind.label),
-              backgroundColor: Colors.white,
+              backgroundColor: Theme.of(context).colorScheme.surface,
               side: const BorderSide(color: AppColors.border),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
             ),
@@ -253,7 +253,7 @@ class _CollectionSummary extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: AppColors.border),
       ),

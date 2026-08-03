@@ -249,7 +249,7 @@ class _SearchForm extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 600 ? 18 : 24),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(24),
       border: Border.all(color: AppColors.border),
       boxShadow: const [
@@ -479,7 +479,7 @@ class _CandidateCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: AppColors.border),
       ),

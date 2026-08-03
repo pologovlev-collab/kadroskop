@@ -177,7 +177,7 @@ class _Filters extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(20),
       border: Border.all(color: AppColors.border),
     ),
@@ -287,7 +287,7 @@ class _StatusMenu extends StatelessWidget {
   final Future<void> Function(MediaItem, WatchStatus) onSetStatus;
   @override
   Widget build(BuildContext context) => Material(
-    color: Colors.white.withValues(alpha: .94),
+    color: Theme.of(context).colorScheme.surface.withValues(alpha: .94),
     borderRadius: BorderRadius.circular(30),
     child: PopupMenuButton<WatchStatus>(
       tooltip: 'Изменить статус',
@@ -316,7 +316,7 @@ class _Summary extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(14),
       border: Border.all(color: AppColors.border),
     ),

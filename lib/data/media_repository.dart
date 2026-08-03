@@ -269,7 +269,17 @@ class LocalMediaRepository implements MediaRepository {
       where: 'id = 1',
       limit: 1,
     );
-    return rows.isEmpty ? null : AppProfile.fromMap(rows.first);
+    if (rows.isEmpty || rows.first['signed_in'] == 0) return null;
+    if (rows.first['signed_in'] == 2) {
+      return const AppProfile(
+        name: 'Гость',
+        email: '',
+        isGuest: true,
+        favoriteGenres: [],
+        darkTheme: false,
+      );
+    }
+    return AppProfile.fromMap(rows.first);
   }
 
   @override
@@ -297,6 +307,7 @@ class LocalMediaRepository implements MediaRepository {
       'is_guest': 0,
       'favorite_genres': '',
       'dark_theme': 0,
+      'signed_in': 1,
       'updated_at': DateTime.now().toIso8601String(),
     }, conflictAlgorithm: ConflictAlgorithm.replace);
     return (await loadProfile())!;
@@ -321,25 +332,48 @@ class LocalMediaRepository implements MediaRepository {
     if (_passwordHash(password, salt) != rows.first['password_hash']) {
       throw StateError('Неверный пароль.');
     }
-    return AppProfile.fromMap(rows.first);
+    await _local.database.update('app_profile', {
+      'signed_in': 1,
+      'updated_at': DateTime.now().toIso8601String(),
+    }, where: 'id = 1');
+    return (await loadProfile())!;
   }
 
   @override
   Future<AppProfile> continueAsGuest() async {
-    await _local.database.insert('app_profile', {
-      'id': 1,
-      'name': 'Гость',
-      'email': '',
-      'is_guest': 1,
-      'favorite_genres': '',
-      'dark_theme': 0,
-      'updated_at': DateTime.now().toIso8601String(),
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    final rows = await _local.database.query('app_profile', where: 'id = 1');
+    if (rows.isEmpty) {
+      await _local.database.insert('app_profile', {
+        'id': 1,
+        'name': 'Гость',
+        'email': '',
+        'is_guest': 1,
+        'favorite_genres': '',
+        'dark_theme': 0,
+        'signed_in': 2,
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+    } else {
+      await _local.database.update('app_profile', {
+        'signed_in': 2,
+        'updated_at': DateTime.now().toIso8601String(),
+      }, where: 'id = 1');
+    }
     return (await loadProfile())!;
   }
 
   @override
   Future<AppProfile> saveProfile(AppProfile profile) async {
+    final current = await _local.database.query(
+      'app_profile',
+      where: 'id = 1',
+      limit: 1,
+    );
+    if (current.isNotEmpty &&
+        current.first['signed_in'] == 2 &&
+        current.first['is_guest'] == 0) {
+      return profile;
+    }
     await _local.database.update('app_profile', {
       'name': profile.name.trim(),
       'email': profile.email.trim().toLowerCase(),
@@ -352,8 +386,10 @@ class LocalMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> logout() =>
-      _local.database.delete('app_profile', where: 'id = 1');
+  Future<void> logout() => _local.database.update('app_profile', {
+    'signed_in': 0,
+    'updated_at': DateTime.now().toIso8601String(),
+  }, where: 'id = 1');
 
   @override
   Future<String> exportCollection() async {

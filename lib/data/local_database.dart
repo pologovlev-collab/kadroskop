@@ -12,6 +12,20 @@ class LocalDatabase {
 
   final Database database;
 
+  @visibleForTesting
+  static Future<LocalDatabase> openInMemoryForTesting() async {
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: 6,
+        onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
+        onCreate: (database, version) => _createSchema(database),
+      ),
+    );
+    return LocalDatabase._(db);
+  }
+
   static Future<LocalDatabase> open() async {
     final DatabaseFactory factory;
     if (Platform.isWindows || Platform.isLinux) {
@@ -25,7 +39,7 @@ class LocalDatabase {
     final db = await factory.openDatabase(
       p.join(directory, 'kadroskop.db'),
       options: OpenDatabaseOptions(
-        version: 5,
+        version: 6,
         onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
         onCreate: (database, version) async {
           await _createSchema(database);
@@ -48,6 +62,11 @@ class LocalDatabase {
             );
           }
           if (oldVersion < 5) await _createProfileTable(database);
+          if (oldVersion >= 5 && oldVersion < 6) {
+            await database.execute(
+              'ALTER TABLE app_profile ADD COLUMN signed_in INTEGER NOT NULL DEFAULT 1',
+            );
+          }
         },
       ),
     );
@@ -111,6 +130,7 @@ class LocalDatabase {
           is_guest INTEGER NOT NULL DEFAULT 1,
           favorite_genres TEXT NOT NULL DEFAULT '',
           dark_theme INTEGER NOT NULL DEFAULT 0,
+          signed_in INTEGER NOT NULL DEFAULT 1,
           updated_at TEXT NOT NULL
         )
       ''');

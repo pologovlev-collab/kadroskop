@@ -247,7 +247,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
                   selectedIndex: _index,
                   onDestinationSelected: (value) =>
                       setState(() => _index = value),
-                  backgroundColor: Colors.white,
+                  backgroundColor: Theme.of(context).colorScheme.surface,
                   indicatorColor: AppColors.accent.withValues(alpha: .12),
                   labelBehavior:
                       NavigationDestinationLabelBehavior.onlyShowSelected,
@@ -279,9 +279,9 @@ class _DesktopNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     width: 252,
-    decoration: const BoxDecoration(
-      color: Colors.white,
-      border: Border(right: BorderSide(color: AppColors.border)),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surface,
+      border: const Border(right: BorderSide(color: AppColors.border)),
     ),
     padding: const EdgeInsets.fromLTRB(18, 24, 18, 20),
     child: Column(
@@ -412,7 +412,9 @@ class _NavButton extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: selected ? Colors.white : AppColors.ink,
+                color: selected
+                    ? Colors.white
+                    : Theme.of(context).colorScheme.onSurface,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -1275,7 +1277,7 @@ class _StatPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(16),
       border: Border.all(color: AppColors.border),
     ),
@@ -1521,7 +1523,7 @@ class _StatisticsFilters extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(20),
       border: Border.all(color: AppColors.border),
     ),
@@ -1584,7 +1586,7 @@ class _MetricCard extends StatelessWidget {
     width: width,
     padding: const EdgeInsets.all(18),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(20),
       border: Border.all(color: AppColors.border),
     ),
@@ -1765,7 +1767,7 @@ class _ChartCard extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(20),
     decoration: BoxDecoration(
-      color: Colors.white,
+      color: Theme.of(context).colorScheme.surface,
       borderRadius: BorderRadius.circular(22),
       border: Border.all(color: AppColors.border),
     ),
@@ -2147,9 +2149,9 @@ class _DetailsSheet extends StatelessWidget {
       alignment: Alignment.bottomCenter,
       child: Container(
         constraints: BoxConstraints(maxWidth: 920, maxHeight: height),
-        decoration: const BoxDecoration(
-          color: AppColors.canvas,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
         ),
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(22, 12, 22, 36),
@@ -2266,8 +2268,12 @@ class _DetailsSheet extends StatelessWidget {
                             style: OutlinedButton.styleFrom(
                               minimumSize: const Size(0, 48),
                               side: const BorderSide(color: AppColors.border),
-                              foregroundColor: AppColors.ink,
-                              backgroundColor: Colors.white,
+                              foregroundColor: Theme.of(
+                                context,
+                              ).colorScheme.onSurface,
+                              backgroundColor: Theme.of(
+                                context,
+                              ).colorScheme.surface,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(14),
                               ),
@@ -2306,7 +2312,7 @@ class _DetailsSheet extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: Theme.of(context).colorScheme.surface,
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(color: AppColors.border),
                         ),
@@ -2437,7 +2443,7 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.border),
       ),
