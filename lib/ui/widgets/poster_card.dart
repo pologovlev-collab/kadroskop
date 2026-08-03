@@ -47,13 +47,17 @@ class PosterCard extends StatelessWidget {
               const SizedBox(height: 3),
               Row(
                 children: [
-                  Text(
-                    '${item.year} · ${item.kind.label}',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: AppColors.muted),
+                  Expanded(
+                    child: Text(
+                      '${item.year} · ${item.kind.label}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: AppColors.muted),
+                    ),
                   ),
-                  const Spacer(),
+                  const SizedBox(width: 5),
                   const Icon(
                     Icons.star_rounded,
                     color: Color(0xFFF0A429),
@@ -65,18 +69,6 @@ class PosterCard extends StatelessWidget {
                   ),
                 ],
               ),
-              if (item.progress > 0 && item.progress < 1) ...[
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: LinearProgressIndicator(
-                    minHeight: 4,
-                    value: item.progress,
-                    backgroundColor: AppColors.border,
-                    color: AppColors.coral,
-                  ),
-                ),
-              ],
             ],
           ),
         ),
@@ -120,6 +112,32 @@ class PosterArtwork extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         CustomPaint(painter: _AtmospherePainter(item.id)),
+        if (item.posterUrl case final posterUrl?)
+          Image.network(
+            posterUrl,
+            fit: BoxFit.cover,
+            cacheWidth: 500,
+            filterQuality: FilterQuality.low,
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              return AnimatedOpacity(
+                opacity: wasSynchronouslyLoaded || frame != null ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: child,
+              );
+            },
+            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+          ),
+        if (item.posterUrl != null)
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Color(0xB3000000)],
+                stops: [.48, 1],
+              ),
+            ),
+          ),
         Positioned(
           left: 14,
           top: 14,

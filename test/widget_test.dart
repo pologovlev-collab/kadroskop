@@ -48,8 +48,8 @@ const _items = [
     rating: 8.7,
     genres: ['Фантастика'],
     colors: [Color(0xFF243843), Color(0xFFC59D73)],
-    progress: .64,
-    status: WatchStatus.watching,
+    runtimeMinutes: 169,
+    status: WatchStatus.watched,
   ),
   MediaItem(
     id: 3,

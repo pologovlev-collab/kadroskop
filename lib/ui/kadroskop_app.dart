@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/media_repository.dart';
@@ -38,6 +40,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
     (Icons.search_outlined, Icons.search_rounded, 'Поиск'),
     (Icons.bubble_chart_outlined, Icons.bubble_chart_rounded, 'Вспомнить'),
     (Icons.bookmarks_outlined, Icons.bookmarks_rounded, 'Коллекция'),
+    (Icons.bar_chart_outlined, Icons.bar_chart_rounded, 'Статистика'),
     (Icons.person_outline_rounded, Icons.person_rounded, 'Профиль'),
   ];
 
@@ -58,22 +61,31 @@ class _KadroskopShellState extends State<KadroskopShell> {
   }
 
   Future<void> _setStatus(MediaItem item, WatchStatus status) async {
-    await widget.repository.setStatus(item.id, status);
+    await widget.repository.setStatus(item, status);
     await _reload();
   }
 
-  void _openDetails(MediaItem item) {
-    widget.repository.recordInteraction(item.id, 'opened');
+  Future<void> _openDetails(MediaItem item) async {
+    widget.repository.recordInteraction(item, 'opened');
+    var detailed = item;
+    try {
+      detailed = await widget.repository.loadDetails(item);
+    } catch (_) {
+      // The locally cached card remains useful when the backend is offline.
+    }
+    if (!mounted) return;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _DetailsSheet(
-        item: item,
+        item: detailed,
+        repository: widget.repository,
         onStatus: (status) {
           Navigator.pop(context);
-          _setStatus(item, status);
+          _setStatus(detailed, status);
         },
+        onEpisodesChanged: _reload,
       ),
     );
   }
@@ -93,14 +105,22 @@ class _KadroskopShellState extends State<KadroskopShell> {
             items: _items,
             onOpen: _openDetails,
             onRecall: () => setState(() => _index = 2),
+            onSearch: () => setState(() => _index = 1),
+            onLibrary: () => setState(() => _index = 3),
+            onStatistics: () => setState(() => _index = 4),
           ),
-          1 => _SearchPage(items: _items, onOpen: _openDetails),
+          1 => _SearchPage(
+            repository: widget.repository,
+            initialItems: _items,
+            onOpen: _openDetails,
+          ),
           2 => _RecallPage(
             items: _items,
             repository: widget.repository,
             onOpen: _openDetails,
           ),
           3 => _LibraryPage(items: _items, onOpen: _openDetails),
+          4 => _StatisticsPage(items: _items, repository: widget.repository),
           _ => _ProfilePage(items: _items),
         };
         return Scaffold(
@@ -125,6 +145,8 @@ class _KadroskopShellState extends State<KadroskopShell> {
                       setState(() => _index = value),
                   backgroundColor: Colors.white,
                   indicatorColor: AppColors.accent.withValues(alpha: .12),
+                  labelBehavior:
+                      NavigationDestinationLabelBehavior.onlyShowSelected,
                   destinations: [
                     for (final item in _destinations)
                       NavigationDestination(
@@ -374,10 +396,16 @@ class _HomePage extends StatelessWidget {
     required this.items,
     required this.onOpen,
     required this.onRecall,
+    required this.onSearch,
+    required this.onLibrary,
+    required this.onStatistics,
   });
   final List<MediaItem> items;
   final ValueChanged<MediaItem> onOpen;
   final VoidCallback onRecall;
+  final VoidCallback onSearch;
+  final VoidCallback onLibrary;
+  final VoidCallback onStatistics;
 
   @override
   Widget build(BuildContext context) => _PageFrame(
@@ -390,22 +418,32 @@ class _HomePage extends StatelessWidget {
           onOpen: () => onOpen(items.first),
         ),
         const SizedBox(height: 28),
-        _KindsRow(),
+        _KindsRow(onSelected: (_) => onSearch()),
         const SizedBox(height: 34),
-        _SectionHeader(title: 'Для вас', action: 'Все рекомендации'),
+        _SectionHeader(
+          title: 'Для вас',
+          action: 'Все рекомендации',
+          onAction: onSearch,
+        ),
         const SizedBox(height: 16),
         _PosterGrid(items: items.take(4).toList(), onOpen: onOpen),
         const SizedBox(height: 38),
-        _SectionHeader(title: 'Продолжить просмотр', action: 'Моя коллекция'),
+        _SectionHeader(
+          title: 'Ваша коллекция',
+          action: 'Открыть коллекцию',
+          onAction: onLibrary,
+        ),
         const SizedBox(height: 16),
-        _ContinueCard(
-          item: items.firstWhere((e) => e.progress > 0),
-          onOpen: () => onOpen(items.firstWhere((e) => e.progress > 0)),
+        _CollectionSummary(
+          items: items,
+          onLibrary: onLibrary,
+          onStatistics: onStatistics,
         ),
         const SizedBox(height: 38),
-        const _SectionHeader(
+        _SectionHeader(
           title: 'Редкие находки',
-          action: 'Обновить подборку',
+          action: 'Искать в каталоге',
+          onAction: onSearch,
         ),
         const SizedBox(height: 16),
         _PosterGrid(items: items.skip(4).toList(), onOpen: onOpen),
@@ -549,6 +587,9 @@ class _HeroPainter extends CustomPainter {
 }
 
 class _KindsRow extends StatelessWidget {
+  const _KindsRow({required this.onSelected});
+  final ValueChanged<MediaKind> onSelected;
+
   @override
   Widget build(BuildContext context) => SizedBox(
     height: 84,
@@ -558,36 +599,43 @@ class _KindsRow extends StatelessWidget {
       separatorBuilder: (_, _) => const SizedBox(width: 10),
       itemBuilder: (context, i) {
         final kind = MediaKind.values[i];
-        return Container(
-          width: 150,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: Colors.white,
+        return Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            onTap: () => onSelected(kind),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: i == 0 ? AppColors.ink : AppColors.canvas,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  kind.icon,
-                  color: i == 0 ? Colors.white : AppColors.ink,
-                ),
+            child: Container(
+              width: 150,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: AppColors.border),
               ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Text(
-                  kind.label,
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: i == 0 ? AppColors.ink : AppColors.canvas,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      kind.icon,
+                      color: i == 0 ? Colors.white : AppColors.ink,
+                    ),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Text(
+                      kind.label,
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },
@@ -596,16 +644,21 @@ class _KindsRow extends StatelessWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title, required this.action});
+  const _SectionHeader({
+    required this.title,
+    required this.action,
+    required this.onAction,
+  });
   final String title;
   final String action;
+  final VoidCallback onAction;
   @override
   Widget build(BuildContext context) => Row(
     children: [
       Expanded(
         child: Text(title, style: Theme.of(context).textTheme.headlineMedium),
       ),
-      TextButton(onPressed: () {}, child: Text(action)),
+      TextButton(onPressed: onAction, child: Text(action)),
     ],
   );
 }
@@ -617,13 +670,10 @@ class _PosterGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final columns = constraints.maxWidth >= 1100
-          ? 4
-          : constraints.maxWidth >= 680
-          ? 3
-          : 2;
       final gap = 16.0;
-      final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+      final width = constraints.maxWidth < 600
+          ? (constraints.maxWidth - gap) / 2
+          : 168.0;
       return Wrap(
         spacing: gap,
         runSpacing: 24,
@@ -636,149 +686,251 @@ class _PosterGrid extends StatelessWidget {
   );
 }
 
-class _ContinueCard extends StatelessWidget {
-  const _ContinueCard({required this.item, required this.onOpen});
-  final MediaItem item;
-  final VoidCallback onOpen;
+class _CollectionSummary extends StatelessWidget {
+  const _CollectionSummary({
+    required this.items,
+    required this.onLibrary,
+    required this.onStatistics,
+  });
+
+  final List<MediaItem> items;
+  final VoidCallback onLibrary;
+  final VoidCallback onStatistics;
+
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onOpen,
-    borderRadius: BorderRadius.circular(22),
-    child: Container(
-      padding: const EdgeInsets.all(16),
+  Widget build(BuildContext context) {
+    final saved = items
+        .where((item) => item.status != WatchStatus.none)
+        .toList();
+    final watched = saved
+        .where((item) => item.status == WatchStatus.watched)
+        .length;
+    return Container(
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: AppColors.border),
       ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 150,
-            child: PosterArtwork(item: item, height: 96, showTitle: false),
-          ),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(item.title, style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 5),
-                Text(
-                  'Продолжить с 01:42:16',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: AppColors.muted),
-                ),
-                const SizedBox(height: 14),
-                LinearProgressIndicator(
-                  value: item.progress,
-                  minHeight: 5,
-                  borderRadius: BorderRadius.circular(8),
-                  backgroundColor: AppColors.border,
-                  color: AppColors.coral,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          const CircleAvatar(
-            backgroundColor: AppColors.ink,
-            foregroundColor: Colors.white,
-            child: Icon(Icons.play_arrow_rounded),
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final values = Wrap(
+            spacing: 26,
+            runSpacing: 14,
+            children: [
+              _SummaryValue(value: '${saved.length}', label: 'в коллекции'),
+              _SummaryValue(value: '$watched', label: 'просмотрено'),
+              _SummaryValue(
+                value: '${saved.expand((item) => item.genres).toSet().length}',
+                label: 'жанров',
+              ),
+            ],
+          );
+          final buttons = Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: onLibrary,
+                icon: const Icon(Icons.bookmarks_outlined),
+                label: const Text('Коллекция'),
+              ),
+              OutlinedButton.icon(
+                onPressed: onStatistics,
+                icon: const Icon(Icons.bar_chart_rounded),
+                label: const Text('Статистика'),
+              ),
+            ],
+          );
+          return constraints.maxWidth < 700
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [values, const SizedBox(height: 20), buttons],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: values),
+                    buttons,
+                  ],
+                );
+        },
       ),
-    ),
+    );
+  }
+}
+
+class _SummaryValue extends StatelessWidget {
+  const _SummaryValue({required this.value, required this.label});
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(value, style: Theme.of(context).textTheme.headlineMedium),
+      Text(label, style: const TextStyle(color: AppColors.muted)),
+    ],
   );
 }
 
 class _SearchPage extends StatefulWidget {
-  const _SearchPage({required this.items, required this.onOpen});
-  final List<MediaItem> items;
+  const _SearchPage({
+    required this.repository,
+    required this.initialItems,
+    required this.onOpen,
+  });
+  final MediaRepository repository;
+  final List<MediaItem> initialItems;
   final ValueChanged<MediaItem> onOpen;
   @override
   State<_SearchPage> createState() => _SearchPageState();
 }
 
 class _SearchPageState extends State<_SearchPage> {
+  Timer? _debounce;
+  List<MediaItem> results = const [];
   String query = '';
+  String? error;
+  bool loading = false;
   MediaKind? selectedKind;
 
   @override
-  Widget build(BuildContext context) {
-    final normalized = query.trim().toLowerCase();
-    final found = widget.items.where((item) {
-      final matchesText =
-          normalized.isEmpty ||
-          item.title.toLowerCase().contains(normalized) ||
-          item.description.toLowerCase().contains(normalized) ||
-          item.genres.any((g) => g.toLowerCase().contains(normalized));
-      return matchesText && (selectedKind == null || item.kind == selectedKind);
-    }).toList();
-    return _PageFrame(
-      title: 'Поиск',
-      subtitle: 'По названию, жанру или детали, которую вы помните',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            onChanged: (value) => setState(() => query = value),
-            decoration: const InputDecoration(
-              prefixIcon: Icon(Icons.search_rounded),
-              hintText: 'Например: «мультфильм про робота в пустыне»',
-              suffixIcon: Icon(Icons.tune_rounded),
-            ),
+  void initState() {
+    super.initState();
+    results = widget.initialItems;
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    query = value;
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 420), _search);
+  }
+
+  Future<void> _search() async {
+    if (!mounted) return;
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      final found = await widget.repository.searchCatalog(
+        query,
+        kind: selectedKind,
+      );
+      if (mounted) setState(() => results = found);
+    } catch (exception) {
+      if (mounted) setState(() => error = exception.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _PageFrame(
+    title: 'Поиск',
+    subtitle:
+        'TMDB и AniList: фильмы, сериалы, аниме и мультфильмы с обложками',
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          onChanged: _onQueryChanged,
+          onSubmitted: (_) => _search(),
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search_rounded),
+            hintText: 'Например: «мультфильм про робота в пустыне»',
+            suffixIcon: Icon(Icons.travel_explore_rounded),
           ),
-          const SizedBox(height: 14),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                ChoiceChip(
-                  label: const Text('Всё'),
-                  selected: selectedKind == null,
-                  onSelected: (_) => setState(() => selectedKind = null),
-                ),
-                for (final kind in MediaKind.values) ...[
-                  const SizedBox(width: 8),
-                  ChoiceChip(
-                    label: Text(kind.label),
-                    selected: selectedKind == kind,
-                    onSelected: (_) => setState(() => selectedKind = kind),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 28),
-          Row(
+        ),
+        const SizedBox(height: 14),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
             children: [
-              Text(
-                normalized.isEmpty ? 'Популярные запросы' : 'Найдено',
-                style: Theme.of(context).textTheme.headlineMedium,
+              ChoiceChip(
+                label: const Text('Всё'),
+                selected: selectedKind == null,
+                onSelected: (_) {
+                  setState(() => selectedKind = null);
+                  _search();
+                },
               ),
-              const Spacer(),
-              Text(
-                '${found.length} совпадений',
-                style: const TextStyle(color: AppColors.muted),
-              ),
+              for (final kind in MediaKind.values) ...[
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: Text(kind.label),
+                  selected: selectedKind == kind,
+                  onSelected: (_) {
+                    setState(() => selectedKind = kind);
+                    _search();
+                  },
+                ),
+              ],
             ],
           ),
-          const SizedBox(height: 16),
-          if (found.isEmpty)
-            const _EmptyState(
-              icon: Icons.search_off_rounded,
-              title: 'Ничего не нашлось',
-              text:
-                  'Попробуйте изменить формулировку или убрать часть фильтров.',
-            )
-          else
-            _PosterGrid(items: found, onOpen: widget.onOpen),
-        ],
-      ),
-    );
-  }
+        ),
+        const SizedBox(height: 28),
+        Row(
+          children: [
+            Text(
+              query.trim().isEmpty ? 'Локальная подборка' : 'Найдено',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const Spacer(),
+            Text(
+              '${results.length} совпадений',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (loading)
+          const LinearProgressIndicator(minHeight: 3, color: AppColors.accent)
+        else if (error != null)
+          _SearchError(message: error!, onRetry: _search)
+        else if (results.isEmpty)
+          const _EmptyState(
+            icon: Icons.search_off_rounded,
+            title: 'Ничего не нашлось',
+            text: 'Попробуйте изменить формулировку или убрать часть фильтров.',
+          )
+        else
+          _PosterGrid(items: results, onOpen: widget.onOpen),
+      ],
+    ),
+  );
+}
+
+class _SearchError extends StatelessWidget {
+  const _SearchError({required this.message, required this.onRetry});
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(22),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFF4F1),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: AppColors.coral.withValues(alpha: .3)),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.cloud_off_rounded, color: AppColors.coral),
+        const SizedBox(width: 12),
+        Expanded(child: Text(message)),
+        TextButton(onPressed: onRetry, child: const Text('Повторить')),
+      ],
+    ),
+  );
 }
 
 class _RecallPage extends StatefulWidget {
@@ -800,7 +952,7 @@ class _RecallPageState extends State<_RecallPage> {
 
   void react(String event) {
     final item = widget.items[cursor % widget.items.length];
-    widget.repository.recordInteraction(item.id, event);
+    widget.repository.recordInteraction(item, event);
     setState(() {
       cursor++;
       reviewed++;
@@ -972,8 +1124,8 @@ class _LibraryPage extends StatelessWidget {
               _StatPill(value: '${saved.length}', label: 'в коллекции'),
               _StatPill(
                 value:
-                    '${saved.where((e) => e.status == WatchStatus.watching).length}',
-                label: 'смотрю',
+                    '${saved.where((e) => e.status == WatchStatus.watched).length}',
+                label: 'просмотрено',
               ),
               _StatPill(
                 value:
@@ -1019,6 +1171,458 @@ class _StatPill extends StatelessWidget {
     ),
   );
 }
+
+class _StatisticsPage extends StatefulWidget {
+  const _StatisticsPage({required this.items, required this.repository});
+  final List<MediaItem> items;
+  final MediaRepository repository;
+
+  @override
+  State<_StatisticsPage> createState() => _StatisticsPageState();
+}
+
+class _StatisticsPageState extends State<_StatisticsPage> {
+  MediaKind? selectedKind;
+  String? selectedGenre;
+  bool onlyWatched = true;
+  Map<int, int> watchedEpisodes = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEpisodeCounts();
+  }
+
+  Future<void> _loadEpisodeCounts() async {
+    final episodic = widget.items.where((item) => item.isEpisodic);
+    final entries = await Future.wait(
+      episodic.map((item) async {
+        final progress = await widget.repository.loadEpisodeProgress(item.id);
+        return MapEntry(
+          item.id,
+          progress.where((value) => value.watched).length,
+        );
+      }),
+    );
+    if (mounted) setState(() => watchedEpisodes = Map.fromEntries(entries));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final genres = widget.items.expand((item) => item.genres).toSet().toList()
+      ..sort();
+    final filtered = widget.items.where((item) {
+      return (!onlyWatched || item.status == WatchStatus.watched) &&
+          (selectedKind == null || item.kind == selectedKind) &&
+          (selectedGenre == null || item.genres.contains(selectedGenre));
+    }).toList();
+    final episodes = filtered.fold<int>(0, (sum, item) {
+      if (!item.isEpisodic) return sum;
+      final saved = watchedEpisodes[item.id] ?? 0;
+      return sum +
+          (saved > 0 || item.status != WatchStatus.watched
+              ? saved
+              : item.episodeCount);
+    });
+    final minutes = filtered.fold<int>(0, (sum, item) {
+      if (!item.isEpisodic) return sum + item.runtimeMinutes;
+      final watched = watchedEpisodes[item.id] ?? 0;
+      final count = watched > 0 || item.status != WatchStatus.watched
+          ? watched
+          : item.episodeCount;
+      return sum + count * item.episodeRuntimeMinutes;
+    });
+    final average = filtered.isEmpty
+        ? 0.0
+        : filtered.fold<double>(0, (sum, item) => sum + item.rating) /
+              filtered.length;
+
+    return _PageFrame(
+      title: 'Статистика коллекции',
+      subtitle: 'Произведения, эпизоды, жанры и время — без функции просмотра',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _StatisticsFilters(
+            selectedKind: selectedKind,
+            selectedGenre: selectedGenre,
+            genres: genres,
+            onlyWatched: onlyWatched,
+            onKind: (value) => setState(() => selectedKind = value),
+            onGenre: (value) => setState(() => selectedGenre = value),
+            onOnlyWatched: (value) => setState(() => onlyWatched = value),
+          ),
+          const SizedBox(height: 22),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 920 ? 4 : 2;
+              final width =
+                  (constraints.maxWidth - 14 * (columns - 1)) / columns;
+              return Wrap(
+                spacing: 14,
+                runSpacing: 14,
+                children: [
+                  _MetricCard(
+                    width: width,
+                    icon: Icons.check_circle_outline,
+                    value: '${filtered.length}',
+                    label: 'произведений',
+                  ),
+                  _MetricCard(
+                    width: width,
+                    icon: Icons.schedule_rounded,
+                    value: _formatDuration(minutes),
+                    label: 'общее время',
+                  ),
+                  _MetricCard(
+                    width: width,
+                    icon: Icons.view_carousel_outlined,
+                    value: '$episodes',
+                    label: 'эпизодов',
+                  ),
+                  _MetricCard(
+                    width: width,
+                    icon: Icons.star_outline_rounded,
+                    value: average.toStringAsFixed(1),
+                    label: 'средний рейтинг',
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 28),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final kinds = {
+                for (final kind in MediaKind.values)
+                  kind: filtered.where((item) => item.kind == kind).length,
+              };
+              final genreCounts = <String, int>{};
+              for (final item in filtered) {
+                for (final genre in item.genres) {
+                  genreCounts.update(
+                    genre,
+                    (value) => value + 1,
+                    ifAbsent: () => 1,
+                  );
+                }
+              }
+              final cards = [
+                _KindBars(values: kinds),
+                _GenreChart(values: genreCounts),
+              ];
+              return constraints.maxWidth < 760
+                  ? Column(
+                      children: [
+                        cards[0],
+                        const SizedBox(height: 14),
+                        cards[1],
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: cards[0]),
+                        const SizedBox(width: 14),
+                        Expanded(child: cards[1]),
+                      ],
+                    );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatisticsFilters extends StatelessWidget {
+  const _StatisticsFilters({
+    required this.selectedKind,
+    required this.selectedGenre,
+    required this.genres,
+    required this.onlyWatched,
+    required this.onKind,
+    required this.onGenre,
+    required this.onOnlyWatched,
+  });
+  final MediaKind? selectedKind;
+  final String? selectedGenre;
+  final List<String> genres;
+  final bool onlyWatched;
+  final ValueChanged<MediaKind?> onKind;
+  final ValueChanged<String?> onGenre;
+  final ValueChanged<bool> onOnlyWatched;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Wrap(
+      spacing: 10,
+      runSpacing: 12,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        ChoiceChip(
+          label: const Text('Все типы'),
+          selected: selectedKind == null,
+          onSelected: (_) => onKind(null),
+        ),
+        for (final kind in MediaKind.values)
+          ChoiceChip(
+            label: Text(kind.label),
+            selected: selectedKind == kind,
+            onSelected: (_) => onKind(kind),
+          ),
+        SizedBox(
+          width: 190,
+          child: DropdownButtonFormField<String?>(
+            initialValue: selectedGenre,
+            decoration: const InputDecoration(labelText: 'Жанр', isDense: true),
+            items: [
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('Все жанры'),
+              ),
+              for (final genre in genres)
+                DropdownMenuItem<String?>(value: genre, child: Text(genre)),
+            ],
+            onChanged: onGenre,
+          ),
+        ),
+        FilterChip(
+          label: const Text('Только просмотренное'),
+          selected: onlyWatched,
+          onSelected: onOnlyWatched,
+        ),
+      ],
+    ),
+  );
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.width,
+    required this.icon,
+    required this.value,
+    required this.label,
+  });
+  final double width;
+  final IconData icon;
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: width,
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: AppColors.accent),
+        const SizedBox(height: 16),
+        Text(value, style: Theme.of(context).textTheme.headlineMedium),
+        const SizedBox(height: 3),
+        Text(label, style: const TextStyle(color: AppColors.muted)),
+      ],
+    ),
+  );
+}
+
+class _KindBars extends StatelessWidget {
+  const _KindBars({required this.values});
+  final Map<MediaKind, int> values;
+
+  @override
+  Widget build(BuildContext context) {
+    final maximum = values.values.fold<int>(
+      1,
+      (max, value) => value > max ? value : max,
+    );
+    return _ChartCard(
+      title: 'По типам',
+      child: Column(
+        children: [
+          for (final entry in values.entries) ...[
+            Row(
+              children: [
+                Expanded(child: Text(entry.key.label)),
+                Text(
+                  '${entry.value}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+            const SizedBox(height: 7),
+            LinearProgressIndicator(
+              value: entry.value / maximum,
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(20),
+              backgroundColor: AppColors.border,
+              color: _kindColor(entry.key),
+            ),
+            const SizedBox(height: 14),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _GenreChart extends StatelessWidget {
+  const _GenreChart({required this.values});
+  final Map<String, int> values;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = values.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final top = entries.take(5).toList();
+    return _ChartCard(
+      title: 'По жанрам',
+      child: Row(
+        children: [
+          SizedBox(
+            width: 126,
+            height: 126,
+            child: CustomPaint(
+              painter: _DonutPainter(top.map((entry) => entry.value).toList()),
+            ),
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              children: [
+                for (var i = 0; i < top.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 9),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 9,
+                          height: 9,
+                          decoration: BoxDecoration(
+                            color: _chartColors[i % _chartColors.length],
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            top[i].key,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          '${top[i].value}',
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartCard extends StatelessWidget {
+  const _ChartCard({required this.title, required this.child});
+  final String title;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 20),
+        child,
+      ],
+    ),
+  );
+}
+
+class _DonutPainter extends CustomPainter {
+  _DonutPainter(this.values);
+  final List<int> values;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final total = values.fold<int>(0, (sum, value) => sum + value);
+    final rect = Offset.zero & size;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 22;
+    if (total == 0) {
+      canvas.drawArc(
+        rect.deflate(13),
+        0,
+        6.283,
+        false,
+        paint..color = AppColors.border,
+      );
+      return;
+    }
+    var start = -1.5708;
+    for (var i = 0; i < values.length; i++) {
+      final sweep = 6.283 * values[i] / total;
+      canvas.drawArc(
+        rect.deflate(13),
+        start,
+        sweep - .035,
+        false,
+        paint..color = _chartColors[i % _chartColors.length],
+      );
+      start += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DonutPainter oldDelegate) =>
+      oldDelegate.values != values;
+}
+
+String _formatDuration(int minutes) {
+  if (minutes < 60) return '$minutes мин';
+  final hours = minutes ~/ 60;
+  if (hours < 24) return '$hours ч ${minutes % 60} мин';
+  return '${hours ~/ 24} д ${hours % 24} ч';
+}
+
+Color _kindColor(MediaKind kind) => switch (kind) {
+  MediaKind.movie => AppColors.accent,
+  MediaKind.series => AppColors.coral,
+  MediaKind.anime => const Color(0xFF8056A8),
+  MediaKind.cartoon => const Color(0xFFE5A62F),
+  MediaKind.animatedSeries => const Color(0xFF3285A8),
+  MediaKind.documentary => const Color(0xFF68846C),
+};
+
+const _chartColors = [
+  AppColors.accent,
+  AppColors.coral,
+  Color(0xFF8056A8),
+  Color(0xFFE5A62F),
+  Color(0xFF3285A8),
+];
 
 class _ProfilePage extends StatelessWidget {
   const _ProfilePage({required this.items});
@@ -1171,27 +1775,58 @@ class _SettingsCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       border: Border.all(color: AppColors.border),
     ),
-    child: const Column(
+    child: Column(
       children: [
         ListTile(
-          leading: Icon(Icons.storage_outlined),
-          title: Text('Локальная база'),
-          subtitle: Text('SQLite · данные хранятся на устройстве'),
-          trailing: Icon(Icons.chevron_right_rounded),
+          onTap: () => _showInfo(
+            context,
+            'Локальная база',
+            'Коллекция, отметки серий и история действий хранятся в SQLite на этом устройстве.',
+          ),
+          leading: const Icon(Icons.storage_outlined),
+          title: const Text('Локальная база'),
+          subtitle: const Text('SQLite · данные хранятся на устройстве'),
+          trailing: const Icon(Icons.chevron_right_rounded),
         ),
-        Divider(height: 1, indent: 56),
+        const Divider(height: 1, indent: 56),
         ListTile(
-          leading: Icon(Icons.tune_rounded),
-          title: Text('Настроить вкус'),
-          subtitle: Text('Жанры, годы и настроение'),
-          trailing: Icon(Icons.chevron_right_rounded),
+          onTap: () => _showInfo(
+            context,
+            'Профиль вкуса',
+            'Предпочтения обновляются по вашим оценкам, поиску и ответам в ленте «Помоги вспомнить».',
+          ),
+          leading: const Icon(Icons.tune_rounded),
+          title: const Text('Настроить вкус'),
+          subtitle: const Text('Жанры, годы и настроение'),
+          trailing: const Icon(Icons.chevron_right_rounded),
         ),
-        Divider(height: 1, indent: 56),
+        const Divider(height: 1, indent: 56),
         ListTile(
-          leading: Icon(Icons.palette_outlined),
-          title: Text('Внешний вид'),
-          subtitle: Text('Системная тема'),
-          trailing: Icon(Icons.chevron_right_rounded),
+          onTap: () => _showInfo(
+            context,
+            'Внешний вид',
+            'Сейчас используется светлая тема Кадроскопа. Тёмная тема появится в следующем этапе.',
+          ),
+          leading: const Icon(Icons.palette_outlined),
+          title: const Text('Внешний вид'),
+          subtitle: const Text('Светлая тема'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+        ),
+      ],
+    ),
+  );
+}
+
+void _showInfo(BuildContext context, String title, String text) {
+  showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      content: Text(text),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Понятно'),
         ),
       ],
     ),
@@ -1233,9 +1868,16 @@ class _EmptyState extends StatelessWidget {
 }
 
 class _DetailsSheet extends StatelessWidget {
-  const _DetailsSheet({required this.item, required this.onStatus});
+  const _DetailsSheet({
+    required this.item,
+    required this.repository,
+    required this.onStatus,
+    required this.onEpisodesChanged,
+  });
   final MediaItem item;
+  final MediaRepository repository;
   final ValueChanged<WatchStatus> onStatus;
+  final Future<void> Function() onEpisodesChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1320,6 +1962,18 @@ class _DetailsSheet extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 22),
+                      if (item.totalRuntimeMinutes > 0) ...[
+                        Text(
+                          item.isEpisodic
+                              ? '${item.seasonCount} сез. · ${item.episodeCount} эп. · примерно ${_formatDuration(item.totalRuntimeMinutes)}'
+                              : 'Длительность: ${_formatDuration(item.runtimeMinutes)}',
+                          style: const TextStyle(
+                            color: AppColors.muted,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       Text(
                         item.description,
                         style: Theme.of(context).textTheme.bodyLarge,
@@ -1330,9 +1984,19 @@ class _DetailsSheet extends StatelessWidget {
                         runSpacing: 10,
                         children: [
                           FilledButton.icon(
-                            onPressed: () => onStatus(WatchStatus.watched),
+                            onPressed: item.isEpisodic
+                                ? () async {
+                                    await repository.setAllEpisodesWatched(
+                                      item,
+                                      true,
+                                    );
+                                    await onEpisodesChanged();
+                                  }
+                                : () => onStatus(WatchStatus.watched),
                             icon: const Icon(Icons.check_rounded),
-                            label: const Text('Смотрел'),
+                            label: Text(
+                              item.isEpisodic ? 'Смотрел всё' : 'Смотрел',
+                            ),
                           ),
                           OutlinedButton.icon(
                             onPressed: () => onStatus(WatchStatus.planned),
@@ -1351,6 +2015,14 @@ class _DetailsSheet extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 30),
+                      if (item.isEpisodic) ...[
+                        _EpisodeSelector(
+                          item: item,
+                          repository: repository,
+                          onChanged: onEpisodesChanged,
+                        ),
+                        const SizedBox(height: 22),
+                      ],
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
@@ -1410,6 +2082,154 @@ class _DetailsSheet extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _EpisodeSelector extends StatefulWidget {
+  const _EpisodeSelector({
+    required this.item,
+    required this.repository,
+    required this.onChanged,
+  });
+  final MediaItem item;
+  final MediaRepository repository;
+  final Future<void> Function() onChanged;
+
+  @override
+  State<_EpisodeSelector> createState() => _EpisodeSelectorState();
+}
+
+class _EpisodeSelectorState extends State<_EpisodeSelector> {
+  final watched = <String>{};
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final values = await widget.repository.loadEpisodeProgress(widget.item.id);
+    if (!mounted) return;
+    setState(() {
+      watched
+        ..clear()
+        ..addAll(
+          values.map((value) => '${value.seasonNumber}:${value.episodeNumber}'),
+        );
+      loading = false;
+    });
+  }
+
+  Future<void> _toggle(int season, int episode, bool value) async {
+    final key = '$season:$episode';
+    setState(() {
+      if (value) {
+        watched.add(key);
+      } else {
+        watched.remove(key);
+      }
+    });
+    await widget.repository.setEpisodeWatched(
+      widget.item,
+      season,
+      episode,
+      value,
+    );
+    await widget.onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final seasons = widget.item.seasons.isNotEmpty
+        ? widget.item.seasons
+        : [
+            SeasonInfo(
+              number: 1,
+              episodeCount: widget.item.episodeCount > 0
+                  ? widget.item.episodeCount
+                  : 12,
+            ),
+          ];
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.view_carousel_outlined, color: AppColors.accent),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Просмотренные серии',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              Text(
+                '${watched.length}/${widget.item.episodeCount}',
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Это отметки для коллекции, а не плеер. Нажмите на номер серии.',
+            style: TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+          const SizedBox(height: 14),
+          if (loading)
+            const LinearProgressIndicator(minHeight: 3)
+          else
+            for (final season in seasons)
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(bottom: 12),
+                initiallyExpanded: season.number == 1,
+                title: Text(
+                  season.name?.isNotEmpty == true
+                      ? season.name!
+                      : 'Сезон ${season.number}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text('${season.episodeCount} серий'),
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (
+                          var episode = 1;
+                          episode <= season.episodeCount;
+                          episode++
+                        )
+                          FilterChip(
+                            label: Text('$episode'),
+                            selected: watched.contains(
+                              '${season.number}:$episode',
+                            ),
+                            onSelected: (value) =>
+                                _toggle(season.number, episode, value),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+        ],
       ),
     );
   }
