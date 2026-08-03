@@ -83,6 +83,65 @@ void main() {
     );
   });
 
+  test('animated series discovery keeps AniList as a fallback', () async {
+    final client = MockClient((request) async {
+      if (request.url.host == 'api.themoviedb.org') {
+        throw const SocketException('connection refused');
+      }
+      if (request.url.host == 'graphql.anilist.co') {
+        return http.Response(
+          jsonEncode({
+            'data': {
+              'Page': {
+                'pageInfo': {'hasNextPage': false},
+                'media': [
+                  {
+                    'id': 777,
+                    'title': {
+                      'romaji': 'Portal Teens',
+                      'english': 'Portal Teens',
+                      'native': 'Portal Teens',
+                    },
+                    'description': 'Teenagers enter another world.',
+                    'startDate': {'year': 2007},
+                    'format': 'TV',
+                    'averageScore': 75,
+                    'genres': ['Adventure'],
+                    'coverImage': {'large': 'https://img.example/777.jpg'},
+                    'episodes': 26,
+                    'duration': 24,
+                    'countryOfOrigin': 'JP',
+                    'popularity': 100,
+                    'tags': const [],
+                  },
+                ],
+              },
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return http.Response('not found', 404);
+    });
+    final gateway = CatalogGateway(client, tmdbToken: 'configured');
+
+    final page = await gateway.discover(
+      workTypes: const ['animated_series'],
+      yearFrom: 1995,
+      yearTo: 2012,
+    );
+
+    expect(page.results, hasLength(1));
+    expect(page.results.single['source'], 'anilist');
+    expect(page.warnings, hasLength(1));
+    expect((page.providers['tmdb'] as Map<String, Object?>)['status'], 'error');
+    expect(
+      (page.providers['anilist'] as Map<String, Object?>)['status'],
+      'connected',
+    );
+  });
+
   test(
     'search returns a service error only when every provider fails',
     () async {

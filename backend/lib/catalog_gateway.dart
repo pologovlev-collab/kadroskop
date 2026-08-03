@@ -142,7 +142,12 @@ class CatalogGateway {
     final includeTv =
         includeEverything ||
         types.any(const {'series', 'animated_series'}.contains);
-    final includeAnime = includeEverything || types.contains('anime');
+    // AniList is also a useful verified fallback for animated works. This is
+    // especially important when TMDB is temporarily unreachable: a request
+    // explicitly narrowed to an animated series must not become TMDB-only.
+    final includeAnime =
+        includeEverything ||
+        types.any(const {'anime', 'animated_series', 'cartoon'}.contains);
     final operations = <_ProviderOperation>[
       if (tmdbConfigured && includeMovies)
         _ProviderOperation(
