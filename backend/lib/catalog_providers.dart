@@ -9,6 +9,12 @@ typedef CatalogListCallback =
     Future<List<Map<String, Object?>>> Function(CatalogProviderRequest request);
 typedef CatalogDetailsCallback =
     Future<Map<String, Object?>> Function(String source, String id);
+typedef CatalogRelatedCallback =
+    Future<List<Map<String, Object?>>> Function(
+      String source,
+      String id, {
+      int page,
+    });
 
 class TmdbCatalogProvider extends _CallbackCatalogProvider {
   TmdbCatalogProvider({
@@ -17,6 +23,8 @@ class TmdbCatalogProvider extends _CallbackCatalogProvider {
     required super.popularCallback,
     required super.discoverCallback,
     required super.detailsCallback,
+    required super.recommendationsCallback,
+    required super.similarCallback,
   }) : super(
          name: 'tmdb',
          kinds: const {
@@ -39,6 +47,8 @@ class AniListCatalogProvider extends _CallbackCatalogProvider {
     required super.discoverCallback,
     required super.detailsCallback,
     required CatalogListCallback characterSearchCallback,
+    required super.recommendationsCallback,
+    required super.similarCallback,
   }) : super(
          name: 'anilist',
          kinds: const {'anime', 'cartoon', 'animatedSeries'},
@@ -58,6 +68,8 @@ class _CallbackCatalogProvider implements CatalogProvider {
     required this.discoverCallback,
     required this.detailsCallback,
     required this.characterSearchCallback,
+    required this.recommendationsCallback,
+    required this.similarCallback,
   });
 
   @override
@@ -71,6 +83,8 @@ class _CallbackCatalogProvider implements CatalogProvider {
   final CatalogListCallback discoverCallback;
   final CatalogDetailsCallback detailsCallback;
   final CatalogListCallback? characterSearchCallback;
+  final CatalogRelatedCallback recommendationsCallback;
+  final CatalogRelatedCallback similarCallback;
 
   @override
   bool get supportsCharacterSearch => characterSearchCallback != null;
@@ -108,6 +122,28 @@ class _CallbackCatalogProvider implements CatalogProvider {
       CatalogProviderRequest(query: characterName, page: page),
     )).map(CatalogMedia.fromJson).toList();
   }
+
+  @override
+  Future<List<CatalogMedia>> recommendations(
+    String source,
+    String id, {
+    int page = 1,
+  }) async => (await recommendationsCallback(
+    source,
+    id,
+    page: page,
+  )).map(CatalogMedia.fromJson).toList();
+
+  @override
+  Future<List<CatalogMedia>> similar(
+    String source,
+    String id, {
+    int page = 1,
+  }) async => (await similarCallback(
+    source,
+    id,
+    page: page,
+  )).map(CatalogMedia.fromJson).toList();
 }
 
 class JikanCatalogProvider implements CatalogProvider {
@@ -259,6 +295,33 @@ class JikanCatalogProvider implements CatalogProvider {
     return results;
   }
 
+  @override
+  Future<List<CatalogMedia>> recommendations(
+    String source,
+    String id, {
+    int page = 1,
+  }) async {
+    final payload = await _http.get(
+      Uri.parse('$_baseUrl/anime/$id/recommendations'),
+    );
+    final rows = payload is Map
+        ? (payload['data'] as List<dynamic>? ?? const [])
+        : const <dynamic>[];
+    return rows
+        .whereType<Map>()
+        .map((row) => row['entry'])
+        .whereType<Map>()
+        .map((row) => _mapMedia(row.cast<String, dynamic>()))
+        .toList();
+  }
+
+  @override
+  Future<List<CatalogMedia>> similar(
+    String source,
+    String id, {
+    int page = 1,
+  }) => recommendations(source, id, page: page);
+
   List<CatalogMedia> _mediaList(Object? payload) {
     final map = payload is Map ? payload : const {};
     return (map['data'] as List<dynamic>? ?? const [])
@@ -349,6 +412,7 @@ class JikanCatalogProvider implements CatalogProvider {
       studios: studios,
       relations: relations,
       sourceUrls: [?url],
+      isAdult: '${row['rating'] ?? ''}'.toUpperCase().startsWith('RX'),
     );
   }
 }
@@ -461,6 +525,20 @@ class TvMazeCatalogProvider implements CatalogProvider {
   @override
   Future<List<CatalogMedia>> searchByCharacter(
     String characterName, {
+    int page = 1,
+  }) async => const [];
+
+  @override
+  Future<List<CatalogMedia>> recommendations(
+    String source,
+    String id, {
+    int page = 1,
+  }) async => const [];
+
+  @override
+  Future<List<CatalogMedia>> similar(
+    String source,
+    String id, {
     int page = 1,
   }) async => const [];
 

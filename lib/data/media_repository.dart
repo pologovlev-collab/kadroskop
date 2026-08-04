@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/app_profile.dart';
 import '../models/media_item.dart';
+import '../models/recommendation.dart';
 import '../models/remember_search.dart';
 import 'local_database.dart';
 
@@ -15,6 +16,13 @@ abstract interface class CatalogSource {
   Future<CatalogPage> popular({MediaKind? kind, int page = 1});
   Future<MediaItem> details(MediaItem item);
   Future<RememberSearchResult> rememberSearch(RememberSearchFilters filters);
+  Future<RecommendationPage> recommendations({
+    required List<RecommendationSeed> seeds,
+    Set<String> excluded = const {},
+    MediaKind? kind,
+    int page = 1,
+    bool refresh = false,
+  });
   Future<Map<String, dynamic>> diagnostics();
 }
 
@@ -29,8 +37,14 @@ abstract interface class MediaRepository {
   Future<CatalogPage> loadPopular({MediaKind? kind, int page = 1});
   Future<MediaItem> loadDetails(MediaItem item);
   Future<RememberSearchResult> rememberSearch(RememberSearchFilters filters);
+  Future<RecommendationPage> loadRecommendations({
+    MediaKind? kind,
+    int page = 1,
+    bool refresh = false,
+  });
   Future<Map<String, dynamic>> loadDiagnostics();
   Future<void> setStatus(MediaItem item, WatchStatus status);
+  Future<void> setFavorite(MediaItem item, bool favorite);
   Future<void> setRating(MediaItem item, double? rating);
   Future<Map<String, int>> loadActivityByMonth();
   Future<AppProfile?> loadProfile();
@@ -70,7 +84,8 @@ class LocalMediaRepository implements MediaRepository {
   @override
   Future<List<MediaItem>> loadMedia() async {
     final rows = await _local.database.rawQuery('''
-      SELECT m.*, COALESCE(u.status, 'none') AS status, u.user_rating
+      SELECT m.*, COALESCE(u.status, 'none') AS status, u.user_rating,
+             COALESCE(u.favorite, 0) AS favorite, u.favorite_updated_at
       FROM media m
       LEFT JOIN user_media u ON u.media_id = m.id
       ORDER BY CASE WHEN u.updated_at IS NULL THEN 1 ELSE 0 END,
@@ -101,7 +116,14 @@ class LocalMediaRepository implements MediaRepository {
     };
     return remoteMatches.map((item) {
       final saved = localBySource['${item.source}:${item.externalId}'];
-      return saved == null ? item : item.copyWith(status: saved.status);
+      return saved == null
+          ? item
+          : item.copyWith(
+              status: saved.status,
+              userRating: saved.userRating,
+              isFavorite: saved.isFavorite,
+              favoriteUpdatedAt: saved.favoriteUpdatedAt,
+            );
     }).toList();
   }
 
@@ -154,7 +176,14 @@ class LocalMediaRepository implements MediaRepository {
     };
     return remote.map((item) {
       final saved = localBySource['${item.source}:${item.externalId}'];
-      return saved == null ? item : item.copyWith(status: saved.status);
+      return saved == null
+          ? item
+          : item.copyWith(
+              status: saved.status,
+              userRating: saved.userRating,
+              isFavorite: saved.isFavorite,
+              favoriteUpdatedAt: saved.favoriteUpdatedAt,
+            );
     }).toList();
   }
 
@@ -166,6 +195,80 @@ class LocalMediaRepository implements MediaRepository {
       throw StateError('Backend поиска не настроен.');
     }
     return _catalog.rememberSearch(filters);
+  }
+
+  @override
+  Future<RecommendationPage> loadRecommendations({
+    MediaKind? kind,
+    int page = 1,
+    bool refresh = false,
+  }) async {
+    if (_catalog == null) {
+      return const RecommendationPage(
+        items: [],
+        page: 1,
+        hasMore: false,
+        warnings: [],
+        guidance: 'Backend рекомендаций не настроен.',
+      );
+    }
+    final media = await loadMedia();
+    final seeds = <RecommendationSeed>[];
+    final excluded = <String>{};
+    for (final item in media) {
+      final externalId = item.externalId;
+      if (externalId == null || item.source == 'local') continue;
+      final identity = '${item.source}:$externalId';
+      if (item.status == WatchStatus.watched ||
+          item.status == WatchStatus.dropped ||
+          (item.userRating != null && item.userRating! <= 4)) {
+        excluded.add(identity);
+      }
+      final weight = _recommendationWeight(item);
+      if (weight > 0) {
+        seeds.add(
+          RecommendationSeed(
+            source: item.source,
+            sourceId: externalId,
+            weight: weight,
+          ),
+        );
+      }
+    }
+    final pageResult = await _catalog.recommendations(
+      seeds: seeds,
+      excluded: excluded,
+      kind: kind,
+      page: page,
+      refresh: refresh,
+    );
+    final saved = await loadMedia();
+    final savedByIdentity = {
+      for (final item in saved)
+        if (item.externalId != null) '${item.source}:${item.externalId}': item,
+    };
+    return RecommendationPage(
+      items: pageResult.items.map((entry) {
+        final item = entry.media;
+        final local = savedByIdentity['${item.source}:${item.externalId}'];
+        return local == null
+            ? entry
+            : RecommendationItem(
+                media: item.copyWith(
+                  status: local.status,
+                  userRating: local.userRating,
+                  isFavorite: local.isFavorite,
+                  favoriteUpdatedAt: local.favoriteUpdatedAt,
+                ),
+                score: entry.score,
+                reasons: entry.reasons,
+              );
+      }).toList(),
+      page: pageResult.page,
+      hasMore: pageResult.hasMore,
+      warnings: pageResult.warnings,
+      guidance: pageResult.guidance,
+    );
   }
 
   @override
@@ -195,7 +298,12 @@ class LocalMediaRepository implements MediaRepository {
   Future<MediaItem> loadDetails(MediaItem item) async {
     if (_catalog == null || item.externalId == null) return item;
     final detailed = await _catalog.details(item);
-    return detailed.copyWith(status: item.status);
+    return detailed.copyWith(
+      status: item.status,
+      userRating: item.userRating,
+      isFavorite: item.isFavorite,
+      favoriteUpdatedAt: item.favoriteUpdatedAt,
+    );
   }
 
   @override
@@ -215,6 +323,29 @@ class LocalMediaRepository implements MediaRepository {
     await _local.database.insert('interactions', {
       'media_id': item.id,
       'event_type': 'status_${status.name}',
+      'created_at': now,
+    });
+  }
+
+  @override
+  Future<void> setFavorite(MediaItem item, bool favorite) async {
+    await _saveMedia(item);
+    final now = DateTime.now().toIso8601String();
+    await _local.database.rawInsert(
+      '''
+      INSERT INTO user_media (
+        media_id, status, favorite, favorite_updated_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(media_id) DO UPDATE SET
+        favorite = excluded.favorite,
+        favorite_updated_at = excluded.favorite_updated_at,
+        updated_at = excluded.updated_at
+      ''',
+      [item.id, item.status.name, favorite ? 1 : 0, now, now],
+    );
+    await _local.database.insert('interactions', {
+      'media_id': item.id,
+      'event_type': favorite ? 'favorite_added' : 'favorite_removed',
       'created_at': now,
     });
   }
@@ -397,7 +528,7 @@ class LocalMediaRepository implements MediaRepository {
       SELECT m.*, u.status, u.progress, u.favorite, u.user_rating, u.updated_at
       FROM media m
       INNER JOIN user_media u ON u.media_id = m.id
-      WHERE u.status != 'none'
+      WHERE u.status != 'none' OR u.favorite = 1
     ''');
     final episodes = await _local.database.query('episode_progress');
     return const JsonEncoder.withIndent('  ').convert({
@@ -437,6 +568,7 @@ class LocalMediaRepository implements MediaRepository {
           'status': row['status'] ?? 'planned',
           'progress': row['progress'] ?? 0,
           'favorite': row['favorite'] ?? 0,
+          'favorite_updated_at': row['favorite_updated_at'],
           'user_rating': row['user_rating'],
           'updated_at': row['updated_at'] ?? DateTime.now().toIso8601String(),
         }, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -613,6 +745,32 @@ class MemoryMediaRepository implements MediaRepository {
   );
 
   @override
+  Future<RecommendationPage> loadRecommendations({
+    MediaKind? kind,
+    int page = 1,
+    bool refresh = false,
+  }) async {
+    final values = items
+        .where((item) => kind == null || item.kind == kind)
+        .where((item) => item.status != WatchStatus.dropped)
+        .map(
+          (item) => RecommendationItem(
+            media: item,
+            score: _recommendationWeight(item),
+            reasons: const ['На основе локальной тестовой коллекции'],
+          ),
+        )
+        .toList();
+    return RecommendationPage(
+      items: values,
+      page: page,
+      hasMore: false,
+      warnings: const [],
+      guidance: values.isEmpty ? 'Добавьте произведения в избранное.' : null,
+    );
+  }
+
+  @override
   Future<Map<String, dynamic>> loadDiagnostics() async => {
     'ok': true,
     'backend': {'status': 'memory'},
@@ -630,6 +788,20 @@ class MemoryMediaRepository implements MediaRepository {
         .map(
           (existing) =>
               existing.id == item.id ? item.copyWith(status: status) : existing,
+        )
+        .toList();
+  }
+
+  @override
+  Future<void> setFavorite(MediaItem item, bool favorite) async {
+    items = items
+        .map(
+          (existing) => existing.id == item.id
+              ? item.copyWith(
+                  isFavorite: favorite,
+                  favoriteUpdatedAt: DateTime.now(),
+                )
+              : existing,
         )
         .toList();
   }
@@ -760,6 +932,29 @@ List<SeasonInfo> _seasonsFor(MediaItem item) {
     for (var number = 1; number <= seasonCount; number++)
       SeasonInfo(number: number, episodeCount: perSeason),
   ];
+}
+
+int _recommendationWeight(MediaItem item) {
+  var weight = 0;
+  if (item.isFavorite) weight = 100;
+  final rating = item.userRating;
+  if (rating != null) {
+    if (rating >= 9) {
+      weight = max(weight, 90);
+    } else if (rating >= 7) {
+      weight = max(weight, 65);
+    } else if (rating <= 4) {
+      return -80;
+    }
+  }
+  final statusWeight = switch (item.status) {
+    WatchStatus.watched => 45,
+    WatchStatus.watching => 40,
+    WatchStatus.planned => 15,
+    WatchStatus.dropped => -70,
+    WatchStatus.none => 0,
+  };
+  return max(weight, statusWeight);
 }
 
 String _randomSalt() {

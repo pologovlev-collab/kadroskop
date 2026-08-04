@@ -12,12 +12,16 @@ class PosterCard extends StatelessWidget {
     required this.onTap,
     this.width = 186,
     this.compact = false,
+    this.onFavorite,
+    this.supportingText,
   });
 
   final MediaItem item;
   final VoidCallback onTap;
   final double width;
   final bool compact;
+  final ValueChanged<bool>? onFavorite;
+  final String? supportingText;
 
   @override
   Widget build(BuildContext context) {
@@ -33,9 +37,22 @@ class PosterCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Hero(
-                tag: 'poster-${item.id}',
-                child: PosterArtwork(item: item, height: posterHeight),
+              Stack(
+                children: [
+                  Hero(
+                    tag: 'poster-${item.id}',
+                    child: PosterArtwork(item: item, height: posterHeight),
+                  ),
+                  if (onFavorite != null)
+                    Positioned(
+                      top: 10,
+                      right: 10,
+                      child: _CardFavoriteButton(
+                        initialValue: item.isFavorite,
+                        onChanged: onFavorite!,
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 10),
               Text(
@@ -69,12 +86,60 @@ class PosterCard extends StatelessWidget {
                   ),
                 ],
               ),
+              if (supportingText case final text?) ...[
+                const SizedBox(height: 7),
+                Text(
+                  text,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppColors.muted),
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
   }
+}
+
+class _CardFavoriteButton extends StatefulWidget {
+  const _CardFavoriteButton({
+    required this.initialValue,
+    required this.onChanged,
+  });
+  final bool initialValue;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  State<_CardFavoriteButton> createState() => _CardFavoriteButtonState();
+}
+
+class _CardFavoriteButtonState extends State<_CardFavoriteButton> {
+  late bool value = widget.initialValue;
+
+  @override
+  void didUpdateWidget(covariant _CardFavoriteButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialValue != oldWidget.initialValue) {
+      value = widget.initialValue;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => IconButton.filledTonal(
+    tooltip: value ? 'Убрать из избранного' : 'Добавить в избранное',
+    onPressed: () {
+      setState(() => value = !value);
+      widget.onChanged(value);
+    },
+    icon: Icon(
+      value ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+      color: value ? Colors.redAccent : null,
+    ),
+  );
 }
 
 class PosterArtwork extends StatelessWidget {

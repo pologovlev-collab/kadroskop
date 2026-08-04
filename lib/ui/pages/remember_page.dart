@@ -12,10 +12,12 @@ class RememberPage extends StatefulWidget {
     super.key,
     required this.repository,
     required this.onOpen,
+    required this.onFavorite,
   });
 
   final MediaRepository repository;
   final ValueChanged<MediaItem> onOpen;
+  final void Function(MediaItem item, bool favorite) onFavorite;
 
   @override
   State<RememberPage> createState() => _RememberPageState();
@@ -191,6 +193,7 @@ class _RememberPageState extends State<RememberPage> {
                   position: _cardIndex + 1,
                   total: _candidates.length,
                   onOpen: widget.onOpen,
+                  onFavorite: widget.onFavorite,
                   onExclude: (candidate) {
                     _exclude(candidate);
                     if (_candidates.isNotEmpty) {
@@ -206,6 +209,7 @@ class _RememberPageState extends State<RememberPage> {
                 _CandidateGrid(
                   candidates: _candidates,
                   onOpen: widget.onOpen,
+                  onFavorite: widget.onFavorite,
                   onExclude: _exclude,
                   onSimilar: _similar,
                 ),
@@ -425,11 +429,13 @@ class _CandidateGrid extends StatelessWidget {
   const _CandidateGrid({
     required this.candidates,
     required this.onOpen,
+    required this.onFavorite,
     required this.onExclude,
     required this.onSimilar,
   });
   final List<RememberCandidate> candidates;
   final ValueChanged<MediaItem> onOpen;
+  final void Function(MediaItem item, bool favorite) onFavorite;
   final ValueChanged<RememberCandidate> onExclude;
   final Future<void> Function(RememberCandidate) onSimilar;
   @override
@@ -452,6 +458,7 @@ class _CandidateGrid extends StatelessWidget {
               child: _CandidateCard(
                 candidate: candidate,
                 onOpen: onOpen,
+                onFavorite: onFavorite,
                 onExclude: onExclude,
                 onSimilar: onSimilar,
               ),
@@ -467,11 +474,13 @@ class _CandidateCard extends StatelessWidget {
     super.key,
     required this.candidate,
     required this.onOpen,
+    required this.onFavorite,
     required this.onExclude,
     required this.onSimilar,
   });
   final RememberCandidate candidate;
   final ValueChanged<MediaItem> onOpen;
+  final void Function(MediaItem item, bool favorite) onFavorite;
   final ValueChanged<RememberCandidate> onExclude;
   final Future<void> Function(RememberCandidate) onSimilar;
 
@@ -577,6 +586,10 @@ class _CandidateCard extends StatelessWidget {
                 onPressed: () => onExclude(candidate),
                 child: const Text('Не оно'),
               ),
+              _CandidateFavoriteButton(
+                initialValue: item.isFavorite,
+                onChanged: (favorite) => onFavorite(item, favorite),
+              ),
             ],
           ),
         ],
@@ -585,12 +598,43 @@ class _CandidateCard extends StatelessWidget {
   }
 }
 
+class _CandidateFavoriteButton extends StatefulWidget {
+  const _CandidateFavoriteButton({
+    required this.initialValue,
+    required this.onChanged,
+  });
+  final bool initialValue;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  State<_CandidateFavoriteButton> createState() =>
+      _CandidateFavoriteButtonState();
+}
+
+class _CandidateFavoriteButtonState extends State<_CandidateFavoriteButton> {
+  late bool value = widget.initialValue;
+
+  @override
+  Widget build(BuildContext context) => IconButton.outlined(
+    tooltip: value ? 'Убрать из избранного' : 'Добавить в избранное',
+    onPressed: () {
+      setState(() => value = !value);
+      widget.onChanged(value);
+    },
+    icon: Icon(
+      value ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+      color: value ? Colors.redAccent : null,
+    ),
+  );
+}
+
 class _CandidateDeck extends StatelessWidget {
   const _CandidateDeck({
     required this.candidate,
     required this.position,
     required this.total,
     required this.onOpen,
+    required this.onFavorite,
     required this.onExclude,
     required this.onSimilar,
     required this.onNext,
@@ -599,6 +643,7 @@ class _CandidateDeck extends StatelessWidget {
   final int position;
   final int total;
   final ValueChanged<MediaItem> onOpen;
+  final void Function(MediaItem item, bool favorite) onFavorite;
   final ValueChanged<RememberCandidate> onExclude;
   final Future<void> Function(RememberCandidate) onSimilar;
   final VoidCallback onNext;
@@ -622,6 +667,7 @@ class _CandidateDeck extends StatelessWidget {
               key: ValueKey(candidate.key),
               candidate: candidate,
               onOpen: onOpen,
+              onFavorite: onFavorite,
               onExclude: onExclude,
               onSimilar: onSimilar,
             ),

@@ -13,6 +13,7 @@ import 'ai_intent_cache.dart';
 import 'ai_query_parser.dart';
 import 'remember_models.dart';
 import 'remember_search_service.dart';
+import 'recommendation_service.dart';
 
 export 'catalog_gateway.dart';
 export 'catalog_provider.dart';
@@ -23,6 +24,7 @@ export 'ai_intent_cache.dart';
 export 'ai_query_parser.dart';
 export 'remember_models.dart';
 export 'remember_search_service.dart';
+export 'recommendation_service.dart';
 
 Future<HttpServer> startKadroskopServer({
   required InternetAddress address,
@@ -35,6 +37,8 @@ Future<HttpServer> startKadroskopServer({
   AiParserController? aiParser,
   AiIntentCache? aiIntentCache,
   RememberSearchService? rememberSearchService,
+  RecommendationService? recommendationService,
+  Duration recommendationCacheTtl = const Duration(hours: 6),
   String aiCachePath = 'data/kadroskop_backend.db',
 }) {
   final aliases =
@@ -67,6 +71,12 @@ Future<HttpServer> startKadroskopServer({
         catalog: catalog,
         parser: parser,
         cache: intentCache,
+      );
+  final recommendations =
+      recommendationService ??
+      RecommendationService.forCatalog(
+        catalog,
+        cacheTtl: recommendationCacheTtl,
       );
   final router = Router()
     ..get('/v1/health', (Request request) {
@@ -105,6 +115,43 @@ Future<HttpServer> startKadroskopServer({
       } on CatalogException catch (error) {
         return _json({'error': error.message}, statusCode: error.statusCode);
       }
+    })
+    ..get('/v1/recommendations/for-you', (Request request) async {
+      final seedValues = _listQuery(request, 'seeds');
+      final seeds = seedValues
+          .map(RecommendationSeed.tryParse)
+          .whereType<RecommendationSeed>()
+          .take(12)
+          .toList();
+      if (seedValues.isNotEmpty && seeds.isEmpty) {
+        return _json({
+          'error': 'Параметр seeds имеет некорректный формат.',
+        }, statusCode: HttpStatus.badRequest);
+      }
+      final kind = request.url.queryParameters['kind'];
+      if (kind != null &&
+          !const {
+            'all',
+            'movie',
+            'series',
+            'anime',
+            'cartoon',
+            'animatedSeries',
+            'documentary',
+          }.contains(kind)) {
+        return _json({
+          'error': 'Неизвестный тип произведения.',
+        }, statusCode: HttpStatus.badRequest);
+      }
+      return _json(
+        await recommendations.forYou(
+          seeds: seeds,
+          excluded: _listQuery(request, 'excluded').take(100).toSet(),
+          kind: kind,
+          page: _page(request),
+          refresh: request.url.queryParameters['refresh'] == 'true',
+        ),
+      );
     })
     ..get('/v1/media/<source>/<id>', (
       Request request,
@@ -162,6 +209,19 @@ int _page(Request request) {
 
 String _normalizedQuery(String? value) =>
     (value ?? '').trim().replaceAll(RegExp(r'\s+'), ' ');
+
+List<String> _listQuery(Request request, String name) => request
+    .url
+    .queryParametersAll[name]
+    .orEmpty
+    .expand((value) => value.split(','))
+    .map((value) => value.trim())
+    .where((value) => value.isNotEmpty)
+    .toList();
+
+extension on List<String>? {
+  List<String> get orEmpty => this ?? const [];
+}
 
 Middleware _cors() =>
     (innerHandler) => (request) async {

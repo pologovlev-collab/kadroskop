@@ -18,7 +18,7 @@ class LocalDatabase {
     final db = await databaseFactoryFfi.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 7,
         onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
         onCreate: (database, version) => _createSchema(database),
       ),
@@ -67,6 +67,11 @@ class LocalDatabase {
               'ALTER TABLE app_profile ADD COLUMN signed_in INTEGER NOT NULL DEFAULT 1',
             );
           }
+          if (oldVersion < 7) {
+            await database.execute(
+              'ALTER TABLE user_media ADD COLUMN favorite_updated_at TEXT',
+            );
+          }
         },
       ),
     );
@@ -103,6 +108,7 @@ class LocalDatabase {
         status TEXT NOT NULL DEFAULT 'none',
         progress REAL NOT NULL DEFAULT 0,
         favorite INTEGER NOT NULL DEFAULT 0,
+        favorite_updated_at TEXT,
         user_rating REAL,
         updated_at TEXT NOT NULL
       )

@@ -13,10 +13,12 @@ class LibraryPage extends StatefulWidget {
     required this.items,
     required this.onOpen,
     required this.onSetStatus,
+    required this.onFavorite,
   });
   final List<MediaItem> items;
   final ValueChanged<MediaItem> onOpen;
   final Future<void> Function(MediaItem, WatchStatus) onSetStatus;
+  final void Function(MediaItem item, bool favorite) onFavorite;
 
   @override
   State<LibraryPage> createState() => _LibraryPageState();
@@ -133,6 +135,8 @@ class _LibraryPageState extends State<LibraryPage> {
                           item: item,
                           width: width,
                           onTap: () => widget.onOpen(item),
+                          onFavorite: (favorite) =>
+                              widget.onFavorite(item, favorite),
                         ),
                         Positioned(
                           top: 8,

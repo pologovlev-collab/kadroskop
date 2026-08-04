@@ -27,6 +27,8 @@ class MediaItem {
     this.seasons = const [],
     this.status = WatchStatus.none,
     this.userRating,
+    this.isFavorite = false,
+    this.favoriteUpdatedAt,
   });
 
   final int id;
@@ -48,6 +50,8 @@ class MediaItem {
   final List<SeasonInfo> seasons;
   final WatchStatus status;
   final double? userRating;
+  final bool isFavorite;
+  final DateTime? favoriteUpdatedAt;
 
   bool get isEpisodic =>
       kind == MediaKind.series ||
@@ -57,7 +61,12 @@ class MediaItem {
   int get totalRuntimeMinutes =>
       isEpisodic ? episodeCount * episodeRuntimeMinutes : runtimeMinutes;
 
-  MediaItem copyWith({WatchStatus? status, double? userRating}) => MediaItem(
+  MediaItem copyWith({
+    WatchStatus? status,
+    double? userRating,
+    bool? isFavorite,
+    DateTime? favoriteUpdatedAt,
+  }) => MediaItem(
     id: id,
     title: title,
     subtitle: subtitle,
@@ -77,6 +86,8 @@ class MediaItem {
     seasons: seasons,
     status: status ?? this.status,
     userRating: userRating ?? this.userRating,
+    isFavorite: isFavorite ?? this.isFavorite,
+    favoriteUpdatedAt: favoriteUpdatedAt ?? this.favoriteUpdatedAt,
   );
 
   factory MediaItem.fromMap(Map<String, Object?> map) => MediaItem(
@@ -111,6 +122,10 @@ class MediaItem {
       orElse: () => WatchStatus.none,
     ),
     userRating: (map['user_rating'] as num?)?.toDouble(),
+    isFavorite: ((map['favorite'] as num?) ?? 0).toInt() == 1,
+    favoriteUpdatedAt: DateTime.tryParse(
+      (map['favorite_updated_at'] as String?) ?? '',
+    ),
   );
 
   factory MediaItem.fromApi(Map<String, dynamic> json) {

@@ -124,6 +124,38 @@ void main() {
       'Naruto Uzumaki',
     );
   });
+
+  test('AniList related lookup uses official recommendations', () async {
+    final gateway = CatalogGateway(
+      MockClient((request) async {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body['query'], contains('AnimeRecommendations'));
+        return _jsonResponse({
+          'data': {
+            'Media': {
+              'recommendations': {
+                'nodes': [
+                  {
+                    'mediaRecommendation':
+                        (_aniListSearch['data']! as Map)['Page']['media'][0],
+                  },
+                ],
+              },
+            },
+          },
+        });
+      }),
+      settings: const CatalogSettings(
+        tmdbEnabled: false,
+        jikanEnabled: false,
+        tvMazeEnabled: false,
+      ),
+    );
+
+    final page = await gateway.related('anilist', '20', includeSimilar: false);
+
+    expect(page.results.single['title'], 'Naruto');
+  });
 }
 
 http.Response _jsonResponse(Object value) => http.Response.bytes(

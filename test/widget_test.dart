@@ -18,7 +18,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Кадроскоп'), findsOneWidget);
-    expect(find.text('Популярное сейчас'), findsOneWidget);
+    expect(find.text('Для вас'), findsOneWidget);
     expect(find.text('Помоги вспомнить'), findsOneWidget);
 
     await tester.tap(find.text('Помоги вспомнить'));
@@ -28,7 +28,7 @@ void main() {
     expect(find.text('Найти произведение'), findsOneWidget);
   });
 
-  testWidgets('category button opens search with the selected kind', (
+  testWidgets('category button filters For You without leaving home', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 900);
@@ -42,11 +42,14 @@ void main() {
     await tester.tap(find.text('Аниме').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('Поиск'), findsWidgets);
+    expect(find.text('Помоги вспомнить'), findsOneWidget);
+    expect(find.text('Аниме для вас'), findsOneWidget);
     final chip = tester.widget<ChoiceChip>(
       find.widgetWithText(ChoiceChip, 'Аниме'),
     );
     expect(chip.selected, isTrue);
+    expect(find.text('Лунный страж'), findsOneWidget);
+    expect(find.text('Интерстеллар'), findsNothing);
   });
 }
 

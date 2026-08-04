@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/media_item.dart';
+import '../../models/recommendation.dart';
 import '../app_theme.dart';
 import '../widgets/adaptive_media_grid.dart';
 import '../widgets/poster_card.dart';
@@ -10,26 +11,36 @@ class HomePage extends StatelessWidget {
     super.key,
     required this.savedItems,
     required this.popularItems,
-    required this.loadingPopular,
-    required this.popularError,
+    required this.recommendations,
+    required this.loadingRecommendations,
+    required this.recommendationsError,
+    required this.recommendationsGuidance,
+    required this.selectedKind,
     required this.onOpen,
+    required this.onFavorite,
     required this.onRecall,
-    required this.onSearchKind,
+    required this.onSelectKind,
+    required this.onOpenSearch,
     required this.onLibrary,
     required this.onStatistics,
-    required this.onRetryPopular,
+    required this.onRetryRecommendations,
   });
 
   final List<MediaItem> savedItems;
   final List<MediaItem> popularItems;
-  final bool loadingPopular;
-  final String? popularError;
+  final List<RecommendationItem> recommendations;
+  final bool loadingRecommendations;
+  final String? recommendationsError;
+  final String? recommendationsGuidance;
+  final MediaKind? selectedKind;
   final ValueChanged<MediaItem> onOpen;
+  final void Function(MediaItem item, bool favorite) onFavorite;
   final VoidCallback onRecall;
-  final ValueChanged<MediaKind?> onSearchKind;
+  final ValueChanged<MediaKind?> onSelectKind;
+  final VoidCallback onOpenSearch;
   final VoidCallback onLibrary;
   final VoidCallback onStatistics;
-  final VoidCallback onRetryPopular;
+  final VoidCallback onRetryRecommendations;
 
   @override
   Widget build(BuildContext context) {
@@ -55,37 +66,54 @@ class HomePage extends StatelessWidget {
                 onOpen: onOpen,
               ),
               const SizedBox(height: 24),
-              _Kinds(onSelected: onSearchKind),
+              _Kinds(selected: selectedKind, onSelected: onSelectKind),
               const SizedBox(height: 32),
               _Header(
-                title: collection.length >= 3 ? 'Для вас' : 'Популярное сейчас',
+                title: selectedKind == null
+                    ? 'Для вас'
+                    : '${selectedKind!.label} для вас',
                 action: 'Открыть поиск',
-                onAction: () => onSearchKind(null),
+                onAction: onOpenSearch,
               ),
               const SizedBox(height: 10),
-              if (collection.length < 3)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 14),
-                  child: Text(
-                    'Добавьте несколько просмотренных произведений — после этого здесь появятся персональные рекомендации.',
-                    style: TextStyle(color: AppColors.muted),
-                  ),
-                ),
-              if (loadingPopular)
+              if (loadingRecommendations)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 54),
                   child: Center(
                     child: CircularProgressIndicator(color: AppColors.accent),
                   ),
                 )
-              else if (popularError != null)
-                _PopularError(message: popularError!, onRetry: onRetryPopular)
-              else if (popularItems.isEmpty)
-                const _NoPopular()
+              else if (recommendationsError != null)
+                _PopularError(
+                  message: recommendationsError!,
+                  onRetry: onRetryRecommendations,
+                )
+              else if (recommendations.isEmpty)
+                _NoRecommendations(
+                  message:
+                      recommendationsGuidance ??
+                      'Добавьте несколько произведений в избранное или поставьте им оценки.',
+                  onSearch: onOpenSearch,
+                )
               else
                 AdaptiveMediaGrid(
-                  items: popularItems.take(12).toList(),
+                  items: recommendations
+                      .take(12)
+                      .map((entry) => entry.media)
+                      .toList(),
                   onOpen: onOpen,
+                  cardBuilder: (context, item, width) {
+                    final entry = recommendations.firstWhere(
+                      (candidate) => candidate.media.id == item.id,
+                    );
+                    return PosterCard(
+                      item: item,
+                      width: width,
+                      onTap: () => onOpen(item),
+                      onFavorite: (favorite) => onFavorite(item, favorite),
+                      supportingText: entry.reasons.firstOrNull,
+                    );
+                  },
                 ),
               const SizedBox(height: 36),
               _Header(
@@ -191,21 +219,31 @@ class _Hero extends StatelessWidget {
 }
 
 class _Kinds extends StatelessWidget {
-  const _Kinds({required this.onSelected});
+  const _Kinds({required this.selected, required this.onSelected});
+  final MediaKind? selected;
   final ValueChanged<MediaKind?> onSelected;
   @override
   Widget build(BuildContext context) => SingleChildScrollView(
     scrollDirection: Axis.horizontal,
     child: Row(
       children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 10),
+          child: ChoiceChip(
+            selected: selected == null,
+            onSelected: (_) => onSelected(null),
+            avatar: const Icon(Icons.apps_rounded, size: 18),
+            label: const Text('Все'),
+          ),
+        ),
         for (final kind in MediaKind.values)
           Padding(
             padding: const EdgeInsets.only(right: 10),
-            child: ActionChip(
-              onPressed: () => onSelected(kind),
+            child: ChoiceChip(
+              selected: selected == kind,
+              onSelected: (_) => onSelected(kind),
               avatar: Icon(kind.icon, size: 18),
               label: Text(kind.label),
-              backgroundColor: Theme.of(context).colorScheme.surface,
               side: const BorderSide(color: AppColors.border),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
             ),
@@ -322,15 +360,34 @@ class _PopularError extends StatelessWidget {
   );
 }
 
-class _NoPopular extends StatelessWidget {
-  const _NoPopular();
+class _NoRecommendations extends StatelessWidget {
+  const _NoRecommendations({required this.message, required this.onSearch});
+  final String message;
+  final VoidCallback onSearch;
   @override
-  Widget build(BuildContext context) => const Padding(
-    padding: EdgeInsets.symmetric(vertical: 36),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 36),
     child: Center(
-      child: Text(
-        'Нет данных. Запустите backend и проверьте каталоги в профиле.',
-        style: TextStyle(color: AppColors.muted),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.favorite_outline_rounded,
+            size: 42,
+            color: AppColors.muted,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.muted),
+          ),
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: onSearch,
+            icon: const Icon(Icons.search_rounded),
+            label: const Text('Найти произведения'),
+          ),
+        ],
       ),
     ),
   );

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../data/media_repository.dart';
 import '../models/app_profile.dart';
 import '../models/media_item.dart';
+import '../models/recommendation.dart';
 import 'app_theme.dart';
 import 'pages/auth_page.dart';
 import 'pages/catalog_search_page.dart';
@@ -94,8 +95,11 @@ class _KadroskopShellState extends State<KadroskopShell> {
   bool _loading = true;
   List<MediaItem> _items = const [];
   List<MediaItem> _popularItems = const [];
-  bool _popularLoading = true;
-  String? _popularError;
+  List<RecommendationItem> _recommendations = const [];
+  bool _recommendationsLoading = true;
+  String? _recommendationsError;
+  String? _recommendationsGuidance;
+  MediaKind? _recommendationKind;
   MediaKind? _searchKind;
 
   static const _destinations = [
@@ -112,6 +116,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
     super.initState();
     _reload();
     _loadPopular();
+    _loadRecommendations();
   }
 
   Future<void> _reload() async {
@@ -125,30 +130,61 @@ class _KadroskopShellState extends State<KadroskopShell> {
   }
 
   Future<void> _loadPopular() async {
-    if (mounted) {
-      setState(() {
-        _popularLoading = true;
-        _popularError = null;
-      });
-    }
     try {
       final page = await widget.repository.loadPopular();
       if (mounted) setState(() => _popularItems = page.items);
-    } catch (error) {
-      if (mounted) setState(() => _popularError = error.toString());
-    } finally {
-      if (mounted) setState(() => _popularLoading = false);
+    } catch (_) {
+      // The personalized section shows its own retryable backend state.
     }
   }
 
   Future<void> _setStatus(MediaItem item, WatchStatus status) async {
     await widget.repository.setStatus(item, status);
     await _reload();
+    await _loadRecommendations(refresh: true);
   }
 
   Future<void> _setRating(MediaItem item, double? rating) async {
     await widget.repository.setRating(item, rating);
     await _reload();
+    await _loadRecommendations(refresh: true);
+  }
+
+  Future<void> _setFavorite(MediaItem item, [bool? value]) async {
+    await widget.repository.setFavorite(item, value ?? !item.isFavorite);
+    await _reload();
+    await _loadRecommendations(refresh: true);
+  }
+
+  Future<void> _loadRecommendations({bool refresh = false}) async {
+    if (mounted) {
+      setState(() {
+        _recommendationsLoading = true;
+        _recommendationsError = null;
+      });
+    }
+    try {
+      final result = await widget.repository.loadRecommendations(
+        kind: _recommendationKind,
+        refresh: refresh,
+      );
+      if (mounted) {
+        setState(() {
+          _recommendations = result.items;
+          _recommendationsGuidance = result.guidance;
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _recommendationsError = error.toString());
+    } finally {
+      if (mounted) setState(() => _recommendationsLoading = false);
+    }
+  }
+
+  void _selectRecommendationKind(MediaKind? kind) {
+    if (_recommendationKind == kind) return;
+    setState(() => _recommendationKind = kind);
+    _loadRecommendations();
   }
 
   Future<void> _openDetails(MediaItem item) async {
@@ -173,6 +209,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
         },
         onEpisodesChanged: _reload,
         onRating: (rating) => _setRating(detailed, rating),
+        onFavorite: (favorite) => _setFavorite(detailed, favorite),
       ),
     );
   }
@@ -191,31 +228,39 @@ class _KadroskopShellState extends State<KadroskopShell> {
           0 => HomePage(
             savedItems: _items,
             popularItems: _popularItems,
-            loadingPopular: _popularLoading,
-            popularError: _popularError,
+            recommendations: _recommendations,
+            loadingRecommendations: _recommendationsLoading,
+            recommendationsError: _recommendationsError,
+            recommendationsGuidance: _recommendationsGuidance,
+            selectedKind: _recommendationKind,
             onOpen: _openDetails,
+            onFavorite: _setFavorite,
             onRecall: () => setState(() => _index = 2),
-            onSearchKind: (kind) => setState(() {
-              _searchKind = kind;
+            onSelectKind: _selectRecommendationKind,
+            onOpenSearch: () => setState(() {
+              _searchKind = _recommendationKind;
               _index = 1;
             }),
             onLibrary: () => setState(() => _index = 3),
             onStatistics: () => setState(() => _index = 4),
-            onRetryPopular: _loadPopular,
+            onRetryRecommendations: () => _loadRecommendations(refresh: true),
           ),
           1 => CatalogSearchPage(
             repository: widget.repository,
             initialKind: _searchKind,
             onOpen: _openDetails,
+            onFavorite: _setFavorite,
           ),
           2 => RememberPage(
             repository: widget.repository,
             onOpen: _openDetails,
+            onFavorite: _setFavorite,
           ),
           3 => LibraryPage(
             items: _items,
             onOpen: _openDetails,
             onSetStatus: _setStatus,
+            onFavorite: _setFavorite,
           ),
           4 => _StatisticsPage(items: _items, repository: widget.repository),
           _ => ProfilePage(
@@ -2135,12 +2180,14 @@ class _DetailsSheet extends StatelessWidget {
     required this.onStatus,
     required this.onEpisodesChanged,
     required this.onRating,
+    required this.onFavorite,
   });
   final MediaItem item;
   final MediaRepository repository;
   final ValueChanged<WatchStatus> onStatus;
   final Future<void> Function() onEpisodesChanged;
   final Future<void> Function(double? rating) onRating;
+  final Future<void> Function(bool favorite) onFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -2298,6 +2345,10 @@ class _DetailsSheet extends StatelessWidget {
                                   : 'Моя оценка ${item.userRating!.toStringAsFixed(0)}',
                             ),
                           ),
+                          _FavoriteAction(
+                            initialValue: item.isFavorite,
+                            onChanged: onFavorite,
+                          ),
                         ],
                       ),
                       const SizedBox(height: 30),
@@ -2371,6 +2422,52 @@ class _DetailsSheet extends StatelessWidget {
       ),
     );
   }
+}
+
+class _FavoriteAction extends StatefulWidget {
+  const _FavoriteAction({required this.initialValue, required this.onChanged});
+
+  final bool initialValue;
+  final Future<void> Function(bool value) onChanged;
+
+  @override
+  State<_FavoriteAction> createState() => _FavoriteActionState();
+}
+
+class _FavoriteActionState extends State<_FavoriteAction> {
+  late bool value = widget.initialValue;
+  bool saving = false;
+
+  Future<void> _toggle() async {
+    if (saving) return;
+    final next = !value;
+    setState(() {
+      value = next;
+      saving = true;
+    });
+    try {
+      await widget.onChanged(next);
+    } catch (_) {
+      if (mounted) {
+        setState(() => value = !next);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Не удалось изменить избранное.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+    onPressed: saving ? null : _toggle,
+    icon: Icon(
+      value ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+      color: value ? Colors.redAccent : null,
+    ),
+    label: Text(value ? 'В избранном' : 'В избранное'),
+  );
 }
 
 class _EpisodeSelector extends StatefulWidget {

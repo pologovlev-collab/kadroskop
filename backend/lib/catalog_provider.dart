@@ -14,6 +14,12 @@ abstract interface class CatalogProvider {
     String characterName, {
     int page = 1,
   });
+  Future<List<CatalogMedia>> recommendations(
+    String source,
+    String id, {
+    int page = 1,
+  });
+  Future<List<CatalogMedia>> similar(String source, String id, {int page = 1});
   Future<CatalogMedia> details(String source, String id);
 }
 
@@ -96,6 +102,7 @@ class CatalogMedia {
     this.studios = const [],
     this.relations = const [],
     this.sourceUrls = const [],
+    this.isAdult = false,
     List<Map<String, Object?>>? provenance,
     this.dedupeConfidence,
   }) : provenance =
@@ -138,6 +145,7 @@ class CatalogMedia {
   final List<String> studios;
   final List<Map<String, Object?>> relations;
   final List<String> sourceUrls;
+  final bool isAdult;
   final List<Map<String, Object?>> provenance;
   final double? dedupeConfidence;
 
@@ -187,6 +195,7 @@ class CatalogMedia {
     studios: _stringList(json['studios']),
     relations: _mapList(json['relations']),
     sourceUrls: _stringList(json['sourceUrls']),
+    isAdult: json['isAdult'] == true || json['adult'] == true,
     provenance: json['provenance'] == null
         ? null
         : _mapList(json['provenance']),
@@ -268,6 +277,7 @@ class CatalogMedia {
         ...preferred.sourceUrls,
         ...secondary.sourceUrls,
       ]),
+      isAdult: preferred.isAdult || secondary.isAdult,
       provenance: _uniqueMaps([
         ...preferred.provenance,
         ...secondary.provenance,
@@ -313,6 +323,7 @@ class CatalogMedia {
     'studios': studios,
     'relations': relations,
     'sourceUrls': sourceUrls,
+    'isAdult': isAdult,
     'provenance': provenance,
     if (dedupeConfidence != null) 'dedupeConfidence': dedupeConfidence,
   };

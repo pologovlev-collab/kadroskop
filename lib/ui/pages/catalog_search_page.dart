@@ -13,11 +13,13 @@ class CatalogSearchPage extends StatefulWidget {
     super.key,
     required this.repository,
     required this.onOpen,
+    required this.onFavorite,
     this.initialKind,
   });
 
   final MediaRepository repository;
   final ValueChanged<MediaItem> onOpen;
+  final void Function(MediaItem item, bool favorite) onFavorite;
   final MediaKind? initialKind;
 
   @override
@@ -212,7 +214,11 @@ class _CatalogSearchPageState extends State<CatalogSearchPage> {
               _WarningBanner(messages: _warnings),
               const SizedBox(height: 16),
             ],
-            AdaptiveMediaGrid(items: _results, onOpen: widget.onOpen),
+            AdaptiveMediaGrid(
+              items: _results,
+              onOpen: widget.onOpen,
+              onFavorite: widget.onFavorite,
+            ),
             if (_hasMore) ...[
               const SizedBox(height: 26),
               Center(

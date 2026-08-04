@@ -50,7 +50,15 @@ JSON-схеме. Пустой, ошибочный или
 - `GET /v1/popular?page=1&kind=movie`
 - `GET /v1/search?q=название&page=1&kind=movie`
 - `GET /v1/media/{source}/{externalId}`
+- `GET /v1/recommendations/for-you?seeds=source:id:weight&kind=all&page=1`
 - `POST /remember/search`
+
+Персональные данные и коллекция не отправляются на backend: Flutter передаёт
+только идентификаторы каталога и рассчитанные локально веса сигналов. Избранное
+имеет наибольший положительный вес; просмотренные, брошенные и низко оценённые
+произведения исключаются из выдачи. Результаты берутся из официальных
+recommendation/similar endpoints, дедуплицируются, получают понятные причины и
+кэшируются на срок `RECOMMENDATIONS_CACHE_HOURS`.
 
 Поддерживаемые значения `kind`: `movie`, `series`, `anime`, `cartoon`,
 `animatedSeries`, `documentary`.

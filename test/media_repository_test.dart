@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kadroskop/data/media_repository.dart';
+import 'package:kadroskop/data/local_database.dart';
 import 'package:kadroskop/models/media_item.dart';
 
 void main() {
@@ -30,6 +31,33 @@ void main() {
     final saved = (await repository.loadMedia()).single;
     expect(saved.userRating, 9);
     expect(saved.rating, 8.2);
+  });
+
+  test('favorite is independent from collection status', () async {
+    final repository = MemoryMediaRepository([series]);
+
+    await repository.setFavorite(series, true);
+    var saved = (await repository.loadMedia()).single;
+    expect(saved.isFavorite, isTrue);
+    expect(saved.status, WatchStatus.none);
+
+    await repository.setFavorite(saved, false);
+    saved = (await repository.loadMedia()).single;
+    expect(saved.isFavorite, isFalse);
+    expect(saved.status, WatchStatus.none);
+  });
+
+  test('favorite persists in SQLite without adding a watch status', () async {
+    final database = await LocalDatabase.openInMemoryForTesting();
+    addTearDown(database.database.close);
+    final repository = LocalMediaRepository(database);
+
+    await repository.setFavorite(series, true);
+    final saved = (await repository.loadMedia()).single;
+
+    expect(saved.isFavorite, isTrue);
+    expect(saved.favoriteUpdatedAt, isNotNull);
+    expect(saved.status, WatchStatus.none);
   });
 
   test('filters catalog by title and kind', () async {

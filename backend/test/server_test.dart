@@ -245,4 +245,59 @@ void main() {
     expect((results.single as Map<String, dynamic>)['title'], 'Verified Work');
     expect(body.toString(), isNot(contains('Дождь на стекле')));
   });
+
+  test('GET /v1/recommendations/for-you validates and forwards seeds', () async {
+    final recommendations = RecommendationService(
+      details: (source, id) async => {
+        'source': source,
+        'externalId': id,
+        'title': 'Naruto',
+        'kind': 'anime',
+        'genres': ['Action'],
+      },
+      related: (source, id, page) async => CatalogSearchPage(
+        results: const [
+          {
+            'id': 3000000101,
+            'source': 'anilist',
+            'externalId': '101',
+            'title': 'Black Clover',
+            'kind': 'anime',
+            'genres': ['Action'],
+          },
+        ],
+        page: page,
+        hasMore: false,
+        warnings: const [],
+        providers: const {},
+      ),
+      discover: (types, genres, page) async => CatalogSearchPage(
+        results: const [],
+        page: page,
+        hasMore: false,
+        warnings: const [],
+        providers: const {},
+      ),
+    );
+    final server = await startKadroskopServer(
+      address: InternetAddress.loopbackIPv4,
+      port: 0,
+      recommendationService: recommendations,
+    );
+    addTearDown(() => server.close(force: true));
+
+    final response = await http.get(
+      Uri.parse(
+        'http://127.0.0.1:${server.port}/v1/recommendations/for-you?seeds=anilist:20:100&kind=anime',
+      ),
+    );
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+
+    expect(response.statusCode, 200);
+    expect((body['results'] as List).single['title'], 'Black Clover');
+    expect(
+      (body['results'] as List).single['recommendationReasons'],
+      isNotEmpty,
+    );
+  });
 }

@@ -107,6 +107,8 @@ class CatalogGateway {
         popularCallback: _legacyTmdbPopular,
         discoverCallback: _legacyTmdbDiscover,
         detailsCallback: _legacyTmdbDetails,
+        recommendationsCallback: _legacyTmdbRecommendations,
+        similarCallback: _legacyTmdbSimilar,
       ),
       AniListCatalogProvider(
         enabled: _settings.aniListEnabled,
@@ -115,6 +117,8 @@ class CatalogGateway {
         discoverCallback: _legacyAniListDiscover,
         detailsCallback: _legacyAniListDetails,
         characterSearchCallback: _legacyAniListCharacterSearch,
+        recommendationsCallback: _legacyAniListRecommendations,
+        similarCallback: _legacyAniListSimilar,
       ),
       JikanCatalogProvider(
         client: _client,
@@ -257,6 +261,61 @@ class CatalogGateway {
         page: safePage,
         hasMore: false,
         warnings: const ['Поиск по персонажам временно недоступен.'],
+        providers: diagnostics,
+      );
+    }
+    final result = await _runOperations(
+      operations,
+      kind: null,
+      page: safePage,
+      recordAliases: true,
+    );
+    _cache.write(cacheKey, result, ttl: _settings.cacheTtl);
+    return result;
+  }
+
+  Future<CatalogSearchPage> related(
+    String source,
+    String id, {
+    int page = 1,
+    bool includeRecommendations = true,
+    bool includeSimilar = true,
+  }) async {
+    final safePage = _safePage(page);
+    final provider = _providers
+        .where((candidate) => candidate.supportsSource(source))
+        .firstOrNull;
+    if (provider == null) {
+      throw CatalogException('Неизвестный источник: $source', 400);
+    }
+    if (!provider.enabled) {
+      throw CatalogException(
+        '${_providerLabel(provider.name)} не настроен или отключён.',
+        503,
+      );
+    }
+    final cacheKey =
+        'related:$source:$id:$safePage:$includeRecommendations:$includeSimilar';
+    final cached = _cache.read<CatalogSearchPage>(cacheKey);
+    if (cached != null) return cached;
+    final operations = <_ProviderOperation>[
+      if (includeRecommendations)
+        _ProviderOperation(
+          provider.name,
+          () => provider.recommendations(source, id, page: safePage),
+        ),
+      if (includeSimilar)
+        _ProviderOperation(
+          provider.name,
+          () => provider.similar(source, id, page: safePage),
+        ),
+    ];
+    if (operations.isEmpty) {
+      return CatalogSearchPage(
+        results: const [],
+        page: safePage,
+        hasMore: false,
+        warnings: const [],
         providers: diagnostics,
       );
     }
@@ -572,6 +631,18 @@ class CatalogGateway {
   Future<Map<String, Object?>> _legacyTmdbDetails(String source, String id) =>
       _tmdbDetails(id, isTv: source == 'tmdb_tv');
 
+  Future<List<Map<String, Object?>>> _legacyTmdbRecommendations(
+    String source,
+    String id, {
+    int page = 1,
+  }) => _tmdbRelated(source, id, endpoint: 'recommendations', page: page);
+
+  Future<List<Map<String, Object?>>> _legacyTmdbSimilar(
+    String source,
+    String id, {
+    int page = 1,
+  }) => _tmdbRelated(source, id, endpoint: 'similar', page: page);
+
   Future<List<Map<String, Object?>>> _legacyAniListSearch(
     CatalogProviderRequest request,
   ) => _searchAniList(request.query, page: request.page);
@@ -624,6 +695,18 @@ class CatalogGateway {
     String id,
   ) => _aniListDetails(id);
 
+  Future<List<Map<String, Object?>>> _legacyAniListRecommendations(
+    String source,
+    String id, {
+    int page = 1,
+  }) => _aniListRecommendations(id, page: page);
+
+  Future<List<Map<String, Object?>>> _legacyAniListSimilar(
+    String source,
+    String id, {
+    int page = 1,
+  }) => _aniListRelations(id);
+
   Future<List<Map<String, Object?>>> _searchTmdb(
     String query,
     String type, {
@@ -646,6 +729,20 @@ class CatalogGateway {
     final uri = Uri.https('api.themoviedb.org', '/3/trending/$type/week', {
       'language': _settings.tmdbLanguage,
       'region': _settings.tmdbRegion,
+      'page': '$page',
+    });
+    return _mapTmdbResults(await _getTmdb(uri), type);
+  }
+
+  Future<List<Map<String, Object?>>> _tmdbRelated(
+    String source,
+    String id, {
+    required String endpoint,
+    required int page,
+  }) async {
+    final type = source == 'tmdb_tv' ? 'tv' : 'movie';
+    final uri = Uri.https('api.themoviedb.org', '/3/$type/$id/$endpoint', {
+      'language': _settings.tmdbLanguage,
       'page': '$page',
     });
     return _mapTmdbResults(await _getTmdb(uri), type);
@@ -866,6 +963,7 @@ class CatalogGateway {
       'studios': const <String>[],
       'relations': const <Map<String, Object?>>[],
       'sourceUrls': ['https://www.themoviedb.org/$type/$externalId'],
+      'isAdult': row['adult'] == true,
     };
   }
 
@@ -930,6 +1028,38 @@ class CatalogGateway {
       throw CatalogException('AniList не нашёл произведение.', 404);
     }
     return _mapAniList(row);
+  }
+
+  Future<List<Map<String, Object?>>> _aniListRecommendations(
+    String id, {
+    required int page,
+  }) async {
+    final response = await _postAniList(_aniListRecommendationsQuery, {
+      'id': int.parse(id),
+      'page': page,
+    });
+    final data = response['data'] as Map<String, dynamic>? ?? const {};
+    final media = data['Media'] as Map<String, dynamic>? ?? const {};
+    final recommendations = media['recommendations'] as Map? ?? const {};
+    return (recommendations['nodes'] as List<dynamic>? ?? const [])
+        .whereType<Map>()
+        .map((node) => node['mediaRecommendation'])
+        .whereType<Map<String, dynamic>>()
+        .map(_mapAniList)
+        .toList();
+  }
+
+  Future<List<Map<String, Object?>>> _aniListRelations(String id) async {
+    final response = await _postAniList(_aniListRelationsQuery, {
+      'id': int.parse(id),
+    });
+    final data = response['data'] as Map<String, dynamic>? ?? const {};
+    final media = data['Media'] as Map<String, dynamic>? ?? const {};
+    final relations = media['relations'] as Map? ?? const {};
+    return (relations['nodes'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(_mapAniList)
+        .toList();
   }
 
   Future<Map<String, dynamic>> _postAniList(
@@ -1041,6 +1171,7 @@ class CatalogGateway {
             .map((link) => link['url'])
             .whereType<String>()),
       }.toList(),
+      'isAdult': row['isAdult'] == true,
     };
   }
 }
@@ -1415,6 +1546,7 @@ const _aniListFields = r'''
   duration
   averageScore
   popularity
+  isAdult
   genres
   tags { name rank }
   coverImage { large extraLarge }
@@ -1498,6 +1630,34 @@ const _aniListDetailsQuery =
 query AnimeDetails(\$id: Int!) {
   Media(id: \$id, type: ANIME) {
     $_aniListFields
+  }
+}
+''';
+
+const _aniListRecommendationsQuery =
+    '''
+query AnimeRecommendations(\$id: Int!, \$page: Int!) {
+  Media(id: \$id, type: ANIME) {
+    recommendations(page: \$page, perPage: 25, sort: RATING_DESC) {
+      nodes {
+        mediaRecommendation {
+          $_aniListFields
+        }
+      }
+    }
+  }
+}
+''';
+
+const _aniListRelationsQuery =
+    '''
+query AnimeRelations(\$id: Int!) {
+  Media(id: \$id, type: ANIME) {
+    relations {
+      nodes {
+        $_aniListFields
+      }
+    }
   }
 }
 ''';

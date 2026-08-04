@@ -11,11 +11,26 @@ Future<void> main() async {
     port: port,
     catalogSettings: CatalogSettings.fromEnvironment(environment),
     aiSettings: AiSettings.fromEnvironment(environment),
+    recommendationCacheTtl: Duration(
+      hours: _boundedInt(
+        environment['RECOMMENDATIONS_CACHE_HOURS'],
+        fallback: 6,
+        min: 1,
+        max: 168,
+      ),
+    ),
   );
   stdout.writeln(
     'Kadroskop backend: http://${server.address.host}:${server.port}',
   );
 }
+
+int _boundedInt(
+  String? value, {
+  required int fallback,
+  required int min,
+  required int max,
+}) => (int.tryParse(value ?? '') ?? fallback).clamp(min, max);
 
 Future<Map<String, String>> _readLocalEnvironment() async {
   final file = File('.env');

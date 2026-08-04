@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../models/media_item.dart';
+import '../models/recommendation.dart';
 import '../models/remember_search.dart';
 import 'media_repository.dart';
 
@@ -95,6 +96,43 @@ class CatalogApi implements CatalogSource {
           .whereType<String>()
           .toList(),
       ai: (data['ai'] as Map?)?.cast<String, dynamic>() ?? const {},
+      guidance: data['guidance'] as String?,
+    );
+  }
+
+  @override
+  Future<RecommendationPage> recommendations({
+    required List<RecommendationSeed> seeds,
+    Set<String> excluded = const {},
+    MediaKind? kind,
+    int page = 1,
+    bool refresh = false,
+  }) async {
+    final uri = _baseUrl
+        .resolve('/v1/recommendations/for-you')
+        .replace(
+          queryParameters: {
+            if (seeds.isNotEmpty)
+              'seeds': seeds.map((seed) => seed.compact).join(','),
+            if (excluded.isNotEmpty) 'excluded': excluded.join(','),
+            'kind': kind?.name ?? 'all',
+            'page': '$page',
+            if (refresh) 'refresh': 'true',
+          },
+        );
+    final data = await _getJson(uri);
+    return RecommendationPage(
+      items: (data['results'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (row) => RecommendationItem.fromJson(row.cast<String, dynamic>()),
+          )
+          .toList(),
+      page: ((data['page'] as num?) ?? page).toInt(),
+      hasMore: data['hasMore'] == true,
+      warnings: (data['warnings'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
       guidance: data['guidance'] as String?,
     );
   }
