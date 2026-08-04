@@ -12,13 +12,16 @@ class LocalDatabase {
 
   final Database database;
 
+  Future<void> reconcileEpisodeProgress() =>
+      _reconcileEpisodeProgress(database);
+
   @visibleForTesting
   static Future<LocalDatabase> openInMemoryForTesting() async {
     sqfliteFfiInit();
     final db = await databaseFactoryFfi.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
-        version: 8,
+        version: 9,
         onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
         onCreate: (database, version) => _createSchema(database),
       ),
@@ -77,6 +80,15 @@ class LocalDatabase {
               'ALTER TABLE media ADD COLUMN backdrop_url TEXT',
             );
           }
+          if (oldVersion < 9) {
+            await database.execute(
+              'ALTER TABLE user_media ADD COLUMN watched_episode_count INTEGER NOT NULL DEFAULT 0',
+            );
+            await database.execute(
+              'ALTER TABLE user_media ADD COLUMN watched_minutes INTEGER NOT NULL DEFAULT 0',
+            );
+            await _reconcileEpisodeProgress(database);
+          }
         },
       ),
     );
@@ -115,6 +127,8 @@ class LocalDatabase {
         progress REAL NOT NULL DEFAULT 0,
         favorite INTEGER NOT NULL DEFAULT 0,
         favorite_updated_at TEXT,
+        watched_episode_count INTEGER NOT NULL DEFAULT 0,
+        watched_minutes INTEGER NOT NULL DEFAULT 0,
         user_rating REAL,
         updated_at TEXT NOT NULL
       )
@@ -158,6 +172,52 @@ class LocalDatabase {
           PRIMARY KEY(media_id, season_number, episode_number)
         )
       ''');
+
+  static Future<void> _reconcileEpisodeProgress(Database database) async {
+    await database.execute('''
+      INSERT OR IGNORE INTO episode_progress (
+        media_id, season_number, episode_number, watched, watched_at
+      )
+      SELECT e.media_id, 0, e.episode_number, e.watched, e.watched_at
+      FROM episode_progress e
+      JOIN media m ON m.id = e.media_id
+      WHERE m.seasons_json = '[]' AND e.season_number != 0
+    ''');
+    await database.execute('''
+      DELETE FROM episode_progress
+      WHERE season_number != 0
+        AND media_id IN (SELECT id FROM media WHERE seasons_json = '[]')
+    ''');
+    await database.execute('''
+      UPDATE user_media
+      SET watched_episode_count = (
+            SELECT COUNT(*)
+            FROM episode_progress e
+            WHERE e.media_id = user_media.media_id AND e.watched = 1
+          ),
+          watched_minutes = (
+            SELECT COUNT(*) * COALESCE(m.episode_runtime_minutes, 0)
+            FROM episode_progress e
+            JOIN media m ON m.id = user_media.media_id
+            WHERE e.media_id = user_media.media_id AND e.watched = 1
+          )
+    ''');
+    await database.execute('''
+      UPDATE user_media
+      SET status = CASE
+        WHEN status = 'dropped' THEN 'dropped'
+        WHEN watched_episode_count = 0 AND status IN ('watching', 'watched')
+          THEN 'planned'
+        WHEN watched_episode_count = 0 THEN status
+        WHEN watched_episode_count >= COALESCE(
+          (SELECT episode_count FROM media WHERE id = user_media.media_id), 0
+        ) AND COALESCE(
+          (SELECT episode_count FROM media WHERE id = user_media.media_id), 0
+        ) > 0 THEN 'watched'
+        ELSE 'watching'
+      END
+    ''');
+  }
 
   static Future<void> _seed(Database database) async {
     final batch = database.batch();

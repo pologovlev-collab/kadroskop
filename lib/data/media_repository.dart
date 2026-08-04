@@ -98,7 +98,9 @@ class LocalMediaRepository implements MediaRepository {
   Future<List<MediaItem>> loadMedia() async {
     final rows = await _local.database.rawQuery('''
       SELECT m.*, COALESCE(u.status, 'none') AS status, u.user_rating,
-             COALESCE(u.favorite, 0) AS favorite, u.favorite_updated_at
+             COALESCE(u.favorite, 0) AS favorite, u.favorite_updated_at,
+             COALESCE(u.watched_episode_count, 0) AS watched_episode_count,
+             COALESCE(u.watched_minutes, 0) AS watched_minutes
       FROM media m
       LEFT JOIN user_media u ON u.media_id = m.id
       ORDER BY CASE WHEN u.updated_at IS NULL THEN 1 ELSE 0 END,
@@ -136,6 +138,8 @@ class LocalMediaRepository implements MediaRepository {
               userRating: saved.userRating,
               isFavorite: saved.isFavorite,
               favoriteUpdatedAt: saved.favoriteUpdatedAt,
+              watchedEpisodeCount: saved.watchedEpisodeCount,
+              watchedMinutes: saved.watchedMinutes,
             );
     }).toList();
   }
@@ -196,6 +200,8 @@ class LocalMediaRepository implements MediaRepository {
               userRating: saved.userRating,
               isFavorite: saved.isFavorite,
               favoriteUpdatedAt: saved.favoriteUpdatedAt,
+              watchedEpisodeCount: saved.watchedEpisodeCount,
+              watchedMinutes: saved.watchedMinutes,
             );
     }).toList();
   }
@@ -272,6 +278,8 @@ class LocalMediaRepository implements MediaRepository {
                   userRating: local.userRating,
                   isFavorite: local.isFavorite,
                   favoriteUpdatedAt: local.favoriteUpdatedAt,
+                  watchedEpisodeCount: local.watchedEpisodeCount,
+                  watchedMinutes: local.watchedMinutes,
                 ),
                 score: entry.score,
                 reasons: entry.reasons,
@@ -323,6 +331,8 @@ class LocalMediaRepository implements MediaRepository {
             userRating: saved.userRating,
             isFavorite: saved.isFavorite,
             favoriteUpdatedAt: saved.favoriteUpdatedAt,
+            watchedEpisodeCount: saved.watchedEpisodeCount,
+            watchedMinutes: saved.watchedMinutes,
           ),
           score: entry.score,
           reasons: entry.reasons,
@@ -345,13 +355,17 @@ class LocalMediaRepository implements MediaRepository {
       };
 
   Future<void> _saveMedia(MediaItem item) async {
+    await _saveMediaWith(_local.database, item);
+  }
+
+  Future<void> _saveMediaWith(DatabaseExecutor executor, MediaItem item) async {
     final data = item.toDatabaseMap();
-    await _local.database.insert(
+    await executor.insert(
       'media',
       data,
       conflictAlgorithm: ConflictAlgorithm.ignore,
     );
-    await _local.database.update(
+    await executor.update(
       'media',
       {...data}..remove('id'),
       where: 'id = ?',
@@ -368,6 +382,8 @@ class LocalMediaRepository implements MediaRepository {
       userRating: item.userRating,
       isFavorite: item.isFavorite,
       favoriteUpdatedAt: item.favoriteUpdatedAt,
+      watchedEpisodeCount: item.watchedEpisodeCount,
+      watchedMinutes: item.watchedMinutes,
     );
   }
 
@@ -448,7 +464,10 @@ class LocalMediaRepository implements MediaRepository {
     final rows = await _local.database.rawQuery('''
       SELECT substr(created_at, 1, 7) AS month, COUNT(*) AS total
       FROM interactions
-      WHERE event_type LIKE 'status_%' OR event_type = 'rated'
+      WHERE event_type LIKE 'status_%'
+         OR event_type LIKE 'episode_%'
+         OR event_type LIKE 'episodes_%'
+         OR event_type = 'rated'
       GROUP BY substr(created_at, 1, 7)
       ORDER BY month
     ''');
@@ -646,6 +665,7 @@ class LocalMediaRepository implements MediaRepository {
         );
       }
     });
+    await _local.reconcileEpisodeProgress();
   }
 
   @override
@@ -684,36 +704,39 @@ class LocalMediaRepository implements MediaRepository {
     int episodeNumber,
     bool watched,
   ) async {
-    await _saveMedia(item);
-    await _local.database.insert('episode_progress', {
-      'media_id': item.id,
-      'season_number': seasonNumber,
-      'episode_number': episodeNumber,
-      'watched': watched ? 1 : 0,
-      'watched_at': watched ? DateTime.now().toIso8601String() : null,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
-    final watchedCount =
-        Sqflite.firstIntValue(
-          await _local.database.rawQuery(
-            'SELECT COUNT(*) FROM episode_progress WHERE media_id = ? AND watched = 1',
-            [item.id],
-          ),
-        ) ??
-        0;
-    await setStatus(
-      item,
-      watchedCount >= item.episodeCount && item.episodeCount > 0
-          ? WatchStatus.watched
-          : watchedCount > 0
-          ? WatchStatus.watching
-          : WatchStatus.planned,
-    );
+    _validateEpisode(item, seasonNumber, episodeNumber);
+    await _local.database.transaction((transaction) async {
+      await _saveMediaWith(transaction, item);
+      final now = DateTime.now().toIso8601String();
+      if (watched) {
+        await transaction.insert('episode_progress', {
+          'media_id': item.id,
+          'season_number': seasonNumber,
+          'episode_number': episodeNumber,
+          'watched': 1,
+          'watched_at': now,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      } else {
+        await transaction.delete(
+          'episode_progress',
+          where: 'media_id = ? AND season_number = ? AND episode_number = ?',
+          whereArgs: [item.id, seasonNumber, episodeNumber],
+        );
+      }
+      await _reconcileItemProgress(transaction, item, now: now);
+      await transaction.insert('interactions', {
+        'media_id': item.id,
+        'event_type': watched ? 'episode_watched' : 'episode_unwatched',
+        'created_at': now,
+      });
+    });
   }
 
   @override
   Future<void> setAllEpisodesWatched(MediaItem item, bool watched) async {
-    await _saveMedia(item);
     await _local.database.transaction((transaction) async {
+      await _saveMediaWith(transaction, item);
+      final now = DateTime.now().toIso8601String();
       await transaction.delete(
         'episode_progress',
         where: 'media_id = ?',
@@ -721,21 +744,110 @@ class LocalMediaRepository implements MediaRepository {
       );
       if (watched) {
         final batch = transaction.batch();
-        for (final season in _seasonsFor(item)) {
-          for (var episode = 1; episode <= season.episodeCount; episode++) {
-            batch.insert('episode_progress', {
-              'media_id': item.id,
-              'season_number': season.number,
-              'episode_number': episode,
-              'watched': 1,
-              'watched_at': DateTime.now().toIso8601String(),
-            });
-          }
+        for (final coordinate in _episodeCoordinates(item)) {
+          batch.insert('episode_progress', {
+            'media_id': item.id,
+            'season_number': coordinate.$1,
+            'episode_number': coordinate.$2,
+            'watched': 1,
+            'watched_at': now,
+          });
         }
         await batch.commit(noResult: true);
       }
+      await _reconcileItemProgress(
+        transaction,
+        item,
+        now: now,
+        forceStatus: watched ? WatchStatus.watched : WatchStatus.planned,
+      );
+      await transaction.insert('interactions', {
+        'media_id': item.id,
+        'event_type': watched ? 'episodes_all_watched' : 'episodes_cleared',
+        'created_at': now,
+      });
     });
-    await setStatus(item, watched ? WatchStatus.watched : WatchStatus.planned);
+  }
+
+  void _validateEpisode(MediaItem item, int seasonNumber, int episodeNumber) {
+    if (episodeNumber < 1) {
+      throw RangeError.range(episodeNumber, 1, null, 'episodeNumber');
+    }
+    if (item.seasons.isEmpty) {
+      if (seasonNumber != 0 ||
+          item.episodeCount <= 0 ||
+          episodeNumber > item.episodeCount) {
+        throw RangeError('Эпизод отсутствует в данных каталога.');
+      }
+      return;
+    }
+    final season = item.seasons
+        .where((value) => value.number == seasonNumber)
+        .firstOrNull;
+    if (season == null || episodeNumber > season.episodeCount) {
+      throw RangeError('Эпизод отсутствует в данных каталога.');
+    }
+  }
+
+  Future<void> _reconcileItemProgress(
+    DatabaseExecutor executor,
+    MediaItem item, {
+    required String now,
+    WatchStatus? forceStatus,
+  }) async {
+    final watchedCount =
+        Sqflite.firstIntValue(
+          await executor.rawQuery(
+            'SELECT COUNT(*) FROM episode_progress WHERE media_id = ? AND watched = 1',
+            [item.id],
+          ),
+        ) ??
+        0;
+    final currentRows = await executor.query(
+      'user_media',
+      columns: ['status'],
+      where: 'media_id = ?',
+      whereArgs: [item.id],
+      limit: 1,
+    );
+    final current = currentRows.isEmpty
+        ? item.status
+        : WatchStatus.values.firstWhere(
+            (value) => value.name == currentRows.first['status'],
+            orElse: () => item.status,
+          );
+    final status =
+        forceStatus ??
+        (watchedCount >= item.episodeCount && item.episodeCount > 0
+            ? WatchStatus.watched
+            : watchedCount > 0
+            ? current == WatchStatus.dropped
+                  ? WatchStatus.dropped
+                  : WatchStatus.watching
+            : current == WatchStatus.dropped
+            ? WatchStatus.dropped
+            : current == WatchStatus.none
+            ? WatchStatus.none
+            : WatchStatus.planned);
+    await executor.rawInsert(
+      '''
+      INSERT INTO user_media (
+        media_id, status, watched_episode_count, watched_minutes, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(media_id) DO UPDATE SET
+        status = excluded.status,
+        watched_episode_count = excluded.watched_episode_count,
+        watched_minutes = excluded.watched_minutes,
+        updated_at = excluded.updated_at
+      ''',
+      [
+        item.id,
+        status.name,
+        watchedCount,
+        watchedCount * item.episodeRuntimeMinutes,
+        now,
+      ],
+    );
   }
 
   @override
@@ -997,39 +1109,78 @@ class MemoryMediaRepository implements MediaRepository {
       );
     }
     _episodeProgress[item.id] = values;
-    await setStatus(
-      item,
-      values.isNotEmpty ? WatchStatus.watching : WatchStatus.planned,
+    final current = items.firstWhere(
+      (candidate) => candidate.id == item.id,
+      orElse: () => item,
     );
+    final count = values.length;
+    final status = count >= item.episodeCount && item.episodeCount > 0
+        ? WatchStatus.watched
+        : count > 0
+        ? current.status == WatchStatus.dropped
+              ? WatchStatus.dropped
+              : WatchStatus.watching
+        : current.status == WatchStatus.dropped
+        ? WatchStatus.dropped
+        : current.status == WatchStatus.none
+        ? WatchStatus.none
+        : WatchStatus.planned;
+    items = items
+        .map(
+          (candidate) => candidate.id == item.id
+              ? current.copyWith(
+                  status: status,
+                  watchedEpisodeCount: count,
+                  watchedMinutes: count * item.episodeRuntimeMinutes,
+                )
+              : candidate,
+        )
+        .toList();
   }
 
   @override
   Future<void> setAllEpisodesWatched(MediaItem item, bool watched) async {
     _episodeProgress[item.id] = watched
         ? [
-            for (final season in _seasonsFor(item))
-              for (var episode = 1; episode <= season.episodeCount; episode++)
-                EpisodeProgress(
-                  seasonNumber: season.number,
-                  episodeNumber: episode,
-                  watched: true,
-                ),
+            for (final coordinate in _episodeCoordinates(item))
+              EpisodeProgress(
+                seasonNumber: coordinate.$1,
+                episodeNumber: coordinate.$2,
+                watched: true,
+              ),
           ]
         : [];
-    await setStatus(item, watched ? WatchStatus.watched : WatchStatus.planned);
+    final count = _episodeProgress[item.id]!.length;
+    final current = items.firstWhere(
+      (candidate) => candidate.id == item.id,
+      orElse: () => item,
+    );
+    items = items
+        .map(
+          (candidate) => candidate.id == item.id
+              ? current.copyWith(
+                  status: watched ? WatchStatus.watched : WatchStatus.planned,
+                  watchedEpisodeCount: count,
+                  watchedMinutes: count * item.episodeRuntimeMinutes,
+                )
+              : candidate,
+        )
+        .toList();
   }
 }
 
-List<SeasonInfo> _seasonsFor(MediaItem item) {
-  if (item.seasons.isNotEmpty) return item.seasons;
-  final seasonCount = item.seasonCount <= 0 ? 1 : item.seasonCount;
-  final perSeason = item.episodeCount <= 0
-      ? 12
-      : (item.episodeCount / seasonCount).ceil();
-  return [
-    for (var number = 1; number <= seasonCount; number++)
-      SeasonInfo(number: number, episodeCount: perSeason),
-  ];
+Iterable<(int, int)> _episodeCoordinates(MediaItem item) sync* {
+  if (item.seasons.isNotEmpty) {
+    for (final season in item.seasons) {
+      for (var episode = 1; episode <= season.episodeCount; episode++) {
+        yield (season.number, episode);
+      }
+    }
+    return;
+  }
+  for (var episode = 1; episode <= item.episodeCount; episode++) {
+    yield (0, episode);
+  }
 }
 
 int _recommendationWeight(MediaItem item) {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -1376,38 +1377,24 @@ class _StatisticsPageState extends State<_StatisticsPage> {
   MediaKind? selectedKind;
   String? selectedGenre;
   bool onlyWatched = true;
-  Map<int, int> watchedEpisodes = const {};
   Map<String, int> activityByMonth = const {};
 
   @override
   void initState() {
     super.initState();
-    _loadEpisodeCounts();
+    _loadActivity();
   }
 
   @override
   void didUpdateWidget(covariant _StatisticsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.items != widget.items) _loadEpisodeCounts();
+    if (oldWidget.items != widget.items) _loadActivity();
   }
 
-  Future<void> _loadEpisodeCounts() async {
-    final episodic = widget.items.where((item) => item.isEpisodic);
-    final entries = await Future.wait(
-      episodic.map((item) async {
-        final progress = await widget.repository.loadEpisodeProgress(item.id);
-        return MapEntry(
-          item.id,
-          progress.where((value) => value.watched).length,
-        );
-      }),
-    );
+  Future<void> _loadActivity() async {
     final activity = await widget.repository.loadActivityByMonth();
     if (mounted) {
-      setState(() {
-        watchedEpisodes = Map.fromEntries(entries);
-        activityByMonth = activity;
-      });
+      setState(() => activityByMonth = activity);
     }
   }
 
@@ -1416,25 +1403,23 @@ class _StatisticsPageState extends State<_StatisticsPage> {
     final genres = widget.items.expand((item) => item.genres).toSet().toList()
       ..sort();
     final filtered = widget.items.where((item) {
-      return (!onlyWatched || item.status == WatchStatus.watched) &&
+      final hasWatchedContent = item.isEpisodic
+          ? item.watchedEpisodeCount > 0
+          : item.status == WatchStatus.watched;
+      return (!onlyWatched || hasWatchedContent) &&
           (selectedKind == null || item.kind == selectedKind) &&
           (selectedGenre == null || item.genres.contains(selectedGenre));
     }).toList();
     final episodes = filtered.fold<int>(0, (sum, item) {
       if (!item.isEpisodic) return sum;
-      final saved = watchedEpisodes[item.id] ?? 0;
-      return sum +
-          (saved > 0 || item.status != WatchStatus.watched
-              ? saved
-              : item.episodeCount);
+      return sum + item.watchedEpisodeCount;
     });
     final minutes = filtered.fold<int>(0, (sum, item) {
-      if (!item.isEpisodic) return sum + item.runtimeMinutes;
-      final watched = watchedEpisodes[item.id] ?? 0;
-      final count = watched > 0 || item.status != WatchStatus.watched
-          ? watched
-          : item.episodeCount;
-      return sum + count * item.episodeRuntimeMinutes;
+      if (!item.isEpisodic) {
+        return sum +
+            (item.status == WatchStatus.watched ? item.runtimeMinutes : 0);
+      }
+      return sum + item.watchedMinutes;
     });
     final rated = filtered.where((item) => item.userRating != null).toList();
     final average = rated.isEmpty
@@ -1449,6 +1434,7 @@ class _StatisticsPageState extends State<_StatisticsPage> {
               item.kind == MediaKind.animatedSeries,
         )
         .length;
+    final anime = filtered.where((item) => item.kind == MediaKind.anime).length;
 
     return _PageFrame(
       title: 'Статистика коллекции',
@@ -1496,6 +1482,12 @@ class _StatisticsPageState extends State<_StatisticsPage> {
                     icon: Icons.live_tv_outlined,
                     value: '$series',
                     label: 'сериалов',
+                  ),
+                  _MetricCard(
+                    width: width,
+                    icon: Icons.auto_awesome_outlined,
+                    value: '$anime',
+                    label: 'аниме',
                   ),
                   _MetricCard(
                     width: width,
@@ -1617,6 +1609,7 @@ class _StatisticsFilters extends StatelessWidget {
         SizedBox(
           width: 190,
           child: DropdownButtonFormField<String?>(
+            isExpanded: true,
             initialValue: selectedGenre,
             decoration: const InputDecoration(labelText: 'Жанр', isDense: true),
             items: [
@@ -1625,7 +1618,10 @@ class _StatisticsFilters extends StatelessWidget {
                 child: Text('Все жанры'),
               ),
               for (final genre in genres)
-                DropdownMenuItem<String?>(value: genre, child: Text(genre)),
+                DropdownMenuItem<String?>(
+                  value: genre,
+                  child: Text(genre, overflow: TextOverflow.ellipsis),
+                ),
             ],
             onChanged: onGenre,
           ),
@@ -2342,7 +2338,7 @@ class _DetailsSheet extends StatelessWidget {
                       if (item.totalRuntimeMinutes > 0) ...[
                         Text(
                           item.isEpisodic
-                              ? '${item.seasonCount} сез. · ${item.episodeCount} эп. · примерно ${_formatDuration(item.totalRuntimeMinutes)}'
+                              ? '${item.seasons.isEmpty ? '${item.episodeCount} эп.' : '${item.seasonCount} сез. · ${item.episodeCount} эп.'} · примерно ${_formatDuration(item.totalRuntimeMinutes)}'
                               : 'Длительность: ${_formatDuration(item.runtimeMinutes)}',
                           style: const TextStyle(
                             color: AppColors.muted,
@@ -2588,27 +2584,32 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
         watched.remove(key);
       }
     });
-    await widget.repository.setEpisodeWatched(
-      widget.item,
-      season,
-      episode,
-      value,
-    );
-    await widget.onChanged();
+    try {
+      await widget.repository.setEpisodeWatched(
+        widget.item,
+        season,
+        episode,
+        value,
+      );
+      await widget.onChanged();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        if (value) {
+          watched.remove(key);
+        } else {
+          watched.add(key);
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось сохранить эпизод: $error')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final seasons = widget.item.seasons.isNotEmpty
-        ? widget.item.seasons
-        : [
-            SeasonInfo(
-              number: 1,
-              episodeCount: widget.item.episodeCount > 0
-                  ? widget.item.episodeCount
-                  : 12,
-            ),
-          ];
+    final seasons = widget.item.seasons;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -2630,7 +2631,9 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
                 ),
               ),
               Text(
-                '${watched.length}/${widget.item.episodeCount}',
+                widget.item.episodeCount > 0
+                    ? '${watched.length}/${widget.item.episodeCount}'
+                    : '${watched.length}',
                 style: const TextStyle(
                   color: AppColors.muted,
                   fontWeight: FontWeight.w700,
@@ -2646,7 +2649,36 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
           const SizedBox(height: 14),
           if (loading)
             const LinearProgressIndicator(minHeight: 3)
-          else
+          else if (seasons.isEmpty && widget.item.episodeCount > 0) ...[
+            Text(
+              'Эпизоды 1–${widget.item.episodeCount}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: math
+                  .min(330, ((widget.item.episodeCount / 6).ceil() * 50))
+                  .toDouble(),
+              child: GridView.builder(
+                primary: false,
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 58,
+                  mainAxisExtent: 44,
+                  crossAxisSpacing: 7,
+                  mainAxisSpacing: 7,
+                ),
+                itemCount: widget.item.episodeCount,
+                itemBuilder: (context, index) {
+                  final episode = index + 1;
+                  return FilterChip(
+                    label: Text('$episode'),
+                    selected: watched.contains('0:$episode'),
+                    onSelected: (value) => _toggle(0, episode, value),
+                  );
+                },
+              ),
+            ),
+          ] else
             for (final season in seasons)
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,

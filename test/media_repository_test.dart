@@ -103,6 +103,73 @@ void main() {
     expect(item.posterUrl, endsWith('poster.jpg'));
     expect(item.backdropUrl, endsWith('backdrop.jpg'));
   });
+
+  test(
+    'flat 220-episode anime keeps progress, time and dropped invariant',
+    () async {
+      final database = await LocalDatabase.openInMemoryForTesting();
+      addTearDown(database.database.close);
+      final repository = LocalMediaRepository(database);
+
+      for (final episode in [1, 2, 3]) {
+        await repository.setEpisodeWatched(naruto, 0, episode, true);
+      }
+      var saved = (await repository.loadMedia()).single;
+      expect(saved.watchedEpisodeCount, 3);
+      expect(saved.watchedMinutes, 72);
+      expect(saved.status, WatchStatus.watching);
+      expect(
+        (await repository.loadEpisodeProgress(
+          naruto.id,
+        )).every((episode) => episode.seasonNumber == 0),
+        isTrue,
+      );
+
+      await repository.setAllEpisodesWatched(saved, true);
+      saved = (await repository.loadMedia()).single;
+      expect(saved.watchedEpisodeCount, 220);
+      expect(saved.status, WatchStatus.watched);
+
+      await repository.setEpisodeWatched(saved, 0, 220, false);
+      saved = (await repository.loadMedia()).single;
+      expect(saved.watchedEpisodeCount, 219);
+      expect(saved.status, WatchStatus.watching);
+
+      await repository.setStatus(saved, WatchStatus.dropped);
+      saved = (await repository.loadMedia()).single;
+      expect(saved.status, WatchStatus.dropped);
+      expect(saved.watchedEpisodeCount, 219);
+      expect(await repository.loadEpisodeProgress(saved.id), hasLength(219));
+    },
+  );
+
+  test(
+    'episode update rolls back completely when progress summary fails',
+    () async {
+      final database = await LocalDatabase.openInMemoryForTesting();
+      addTearDown(database.database.close);
+      final repository = LocalMediaRepository(database);
+      await repository.setStatus(naruto, WatchStatus.planned);
+      await database.database.execute('''
+      CREATE TRIGGER reject_progress_update
+      BEFORE UPDATE OF watched_episode_count ON user_media
+      WHEN NEW.watched_episode_count > 0
+      BEGIN
+        SELECT RAISE(ABORT, 'test rollback');
+      END
+    ''');
+
+      await expectLater(
+        repository.setEpisodeWatched(naruto, 0, 1, true),
+        throwsA(anything),
+      );
+
+      expect(await repository.loadEpisodeProgress(naruto.id), isEmpty);
+      final saved = (await repository.loadMedia()).single;
+      expect(saved.watchedEpisodeCount, 0);
+      expect(saved.status, WatchStatus.planned);
+    },
+  );
 }
 
 const series = MediaItem(
@@ -134,4 +201,20 @@ const similarSeries = MediaItem(
   rating: 7.9,
   genres: ['Детектив'],
   colors: [Color(0xFF101A2C), Color(0xFF8B3D56)],
+);
+
+const naruto = MediaItem(
+  id: 3000000020,
+  source: 'anilist',
+  externalId: '20',
+  title: 'Naruto',
+  subtitle: 'NARUTO',
+  description: 'История юного ниндзя.',
+  year: 2002,
+  kind: MediaKind.anime,
+  rating: 8,
+  genres: ['Action'],
+  colors: [Color(0xFF101A2C), Color(0xFF8B3D56)],
+  episodeCount: 220,
+  episodeRuntimeMinutes: 24,
 );

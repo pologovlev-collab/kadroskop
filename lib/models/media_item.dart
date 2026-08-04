@@ -30,6 +30,8 @@ class MediaItem {
     this.userRating,
     this.isFavorite = false,
     this.favoriteUpdatedAt,
+    this.watchedEpisodeCount = 0,
+    this.watchedMinutes = 0,
   });
 
   final int id;
@@ -54,6 +56,8 @@ class MediaItem {
   final double? userRating;
   final bool isFavorite;
   final DateTime? favoriteUpdatedAt;
+  final int watchedEpisodeCount;
+  final int watchedMinutes;
 
   bool get isEpisodic =>
       kind == MediaKind.series ||
@@ -68,6 +72,8 @@ class MediaItem {
     double? userRating,
     bool? isFavorite,
     DateTime? favoriteUpdatedAt,
+    int? watchedEpisodeCount,
+    int? watchedMinutes,
   }) => MediaItem(
     id: id,
     title: title,
@@ -91,6 +97,8 @@ class MediaItem {
     userRating: userRating ?? this.userRating,
     isFavorite: isFavorite ?? this.isFavorite,
     favoriteUpdatedAt: favoriteUpdatedAt ?? this.favoriteUpdatedAt,
+    watchedEpisodeCount: watchedEpisodeCount ?? this.watchedEpisodeCount,
+    watchedMinutes: watchedMinutes ?? this.watchedMinutes,
   );
 
   factory MediaItem.fromMap(Map<String, Object?> map) => MediaItem(
@@ -130,6 +138,8 @@ class MediaItem {
     favoriteUpdatedAt: DateTime.tryParse(
       (map['favorite_updated_at'] as String?) ?? '',
     ),
+    watchedEpisodeCount: ((map['watched_episode_count'] as num?) ?? 0).toInt(),
+    watchedMinutes: ((map['watched_minutes'] as num?) ?? 0).toInt(),
   );
 
   factory MediaItem.fromApi(Map<String, dynamic> json) {

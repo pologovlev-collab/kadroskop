@@ -142,6 +142,43 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('manual episodes appear reactively in statistics', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const anime = MediaItem(
+      id: 60,
+      source: 'anilist',
+      externalId: '60',
+      title: 'Эпизодическое аниме',
+      subtitle: 'Anime',
+      description: 'Описание.',
+      year: 2020,
+      kind: MediaKind.anime,
+      rating: 8,
+      genres: ['Action'],
+      colors: [Color(0xFF102030), Color(0xFF405060)],
+      episodeCount: 12,
+      episodeRuntimeMinutes: 24,
+    );
+    final repository = MemoryMediaRepository(const [anime]);
+    for (final episode in [1, 2, 3]) {
+      await repository.setEpisodeWatched(anime, 0, episode, true);
+    }
+    await tester.pumpWidget(KadroskopApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Статистика').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Статистика коллекции'), findsOneWidget);
+    expect(find.text('эпизодов'), findsOneWidget);
+    expect(find.text('1 ч 12 мин'), findsOneWidget);
+    expect(find.text('3'), findsWidgets);
+  });
 }
 
 const _items = [
