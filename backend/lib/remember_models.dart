@@ -239,13 +239,21 @@ class RememberSearchIntent {
       workTypes: _enumList(json['workTypes'], _workTypes, max: 6),
       yearFrom: yearFrom,
       yearTo: yearTo,
-      genres: _stringList(json['genres'], max: 8, itemMax: 50),
-      plotKeywords: _stringList(json['plotKeywords'], max: 16, itemMax: 80),
-      titleFragments: _stringList(json['titleFragments'], max: 6, itemMax: 100),
-      characterNames: _stringList(json['characterNames'], max: 8, itemMax: 80),
-      franchiseTerms: _stringList(json['franchiseTerms'], max: 6, itemMax: 100),
-      locations: _stringList(json['locations'], max: 8, itemMax: 80),
-      objects: _stringList(json['objects'], max: 8, itemMax: 80),
+      genres: _stringList(json['genres'], max: 10, itemMax: 50),
+      plotKeywords: _stringList(json['plotKeywords'], max: 20, itemMax: 80),
+      titleFragments: _stringList(
+        json['titleFragments'],
+        max: 10,
+        itemMax: 100,
+      ),
+      characterNames: _stringList(json['characterNames'], max: 15, itemMax: 80),
+      franchiseTerms: _stringList(
+        json['franchiseTerms'],
+        max: 10,
+        itemMax: 100,
+      ),
+      locations: _stringList(json['locations'], max: 10, itemMax: 80),
+      objects: _stringList(json['objects'], max: 10, itemMax: 80),
       searchVariants: _stringList(
         json['searchVariants'],
         max: 10,
@@ -253,10 +261,10 @@ class RememberSearchIntent {
       ),
       originalLanguageHints: _stringList(
         json['originalLanguageHints'],
-        max: 5,
+        max: 8,
         itemMax: 20,
       ),
-      countries: _stringList(json['countries'], max: 5, itemMax: 50),
+      countries: _stringList(json['countries'], max: 8, itemMax: 50),
       visualStyle: _optionalEnum(
         json['visualStyle'],
         _visualStyles,
@@ -387,7 +395,7 @@ int? _optionalYear(Object? value, String field, int currentYear) {
     throw RememberValidationException('Поле $field должно быть годом.');
   }
   final year = value.toInt();
-  if (year < 1888 || year > currentYear + 5) {
+  if (year < 1880 || year > currentYear + 5) {
     throw RememberValidationException('Поле $field вне разумного диапазона.');
   }
   return year;

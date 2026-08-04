@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'ai_usage_quota.dart';
 import 'remember_models.dart';
 import 'query_normalizer.dart';
 
@@ -20,6 +21,19 @@ class AiSettings {
     required this.cacheHours,
     required this.rerankEnabled,
     required this.secondaryProvider,
+    required this.fallbackProvider,
+    required this.logFullPrompts,
+    required this.openRouterApiKey,
+    required this.openRouterBaseUrl,
+    required this.openRouterModel,
+    required this.openRouterSpecificModel,
+    required this.openRouterAppTitle,
+    required this.openRouterHttpReferer,
+    required this.openRouterTimeout,
+    required this.openRouterMaxOutputTokens,
+    required this.openRouterCacheDays,
+    required this.openRouterLocalDailyLimit,
+    required this.openRouterRequireStructuredOutput,
     required this.geminiApiKey,
     required this.geminiModel,
     required this.geminiThinkingLevel,
@@ -39,6 +53,19 @@ class AiSettings {
   final int cacheHours;
   final bool rerankEnabled;
   final String secondaryProvider;
+  final String fallbackProvider;
+  final bool logFullPrompts;
+  final String? openRouterApiKey;
+  final String openRouterBaseUrl;
+  final String openRouterModel;
+  final String? openRouterSpecificModel;
+  final String? openRouterAppTitle;
+  final String? openRouterHttpReferer;
+  final Duration openRouterTimeout;
+  final int openRouterMaxOutputTokens;
+  final int openRouterCacheDays;
+  final int openRouterLocalDailyLimit;
+  final bool openRouterRequireStructuredOutput;
   final String? geminiApiKey;
   final String geminiModel;
   final String geminiThinkingLevel;
@@ -51,7 +78,7 @@ class AiSettings {
 
   factory AiSettings.fromEnvironment(Map<String, String> values) => AiSettings(
     enabled: _bool(values['AI_ENABLED'], fallback: true),
-    provider: (values['AI_PROVIDER'] ?? 'gemini').trim().toLowerCase(),
+    provider: (values['AI_PROVIDER'] ?? 'openrouter').trim().toLowerCase(),
     timeout: Duration(
       seconds: _boundedInt(
         values['AI_TIMEOUT_SECONDS'],
@@ -82,6 +109,48 @@ class AiSettings {
     secondaryProvider: (values['AI_SECONDARY_PROVIDER'] ?? 'none')
         .trim()
         .toLowerCase(),
+    fallbackProvider: (values['AI_FALLBACK_PROVIDER'] ?? 'none')
+        .trim()
+        .toLowerCase(),
+    logFullPrompts: _bool(values['AI_LOG_FULL_PROMPTS'], fallback: false),
+    openRouterApiKey: _secret(values['OPENROUTER_API_KEY']),
+    openRouterBaseUrl:
+        _secret(values['OPENROUTER_BASE_URL']) ??
+        'https://openrouter.ai/api/v1',
+    openRouterModel: _secret(values['OPENROUTER_MODEL']) ?? 'openrouter/free',
+    openRouterSpecificModel: _secret(values['OPENROUTER_SPECIFIC_MODEL']),
+    openRouterAppTitle: _secret(values['OPENROUTER_APP_TITLE']),
+    openRouterHttpReferer: _secret(values['OPENROUTER_HTTP_REFERER']),
+    openRouterTimeout: Duration(
+      seconds: _boundedInt(
+        values['OPENROUTER_TIMEOUT_SECONDS'],
+        fallback: 30,
+        min: 2,
+        max: 60,
+      ),
+    ),
+    openRouterMaxOutputTokens: _boundedInt(
+      values['OPENROUTER_MAX_OUTPUT_TOKENS'],
+      fallback: 400,
+      min: 100,
+      max: 400,
+    ),
+    openRouterCacheDays: _boundedInt(
+      values['OPENROUTER_CACHE_DAYS'],
+      fallback: 30,
+      min: 1,
+      max: 90,
+    ),
+    openRouterLocalDailyLimit: _boundedInt(
+      values['OPENROUTER_LOCAL_DAILY_LIMIT'],
+      fallback: 45,
+      min: 0,
+      max: 1000,
+    ),
+    openRouterRequireStructuredOutput: _bool(
+      values['OPENROUTER_REQUIRE_STRUCTURED_OUTPUT'],
+      fallback: true,
+    ),
     geminiApiKey: _secret(values['GEMINI_API_KEY']),
     geminiModel: _secret(values['GEMINI_MODEL']) ?? 'gemini-3.5-flash-lite',
     geminiThinkingLevel: _secret(values['GEMINI_THINKING_LEVEL']) ?? 'minimal',
@@ -93,9 +162,25 @@ class AiSettings {
     yandexFolderId: _secret(values['YANDEXGPT_FOLDER_ID']),
     yandexModel: _secret(values['YANDEXGPT_MODEL']) ?? 'yandexgpt-lite',
   );
+
+  Duration get intentCacheTtl => provider == 'openrouter'
+      ? Duration(days: openRouterCacheDays)
+      : Duration(hours: cacheHours);
+
+  String get configuredOpenRouterModel =>
+      openRouterSpecificModel ?? openRouterModel;
 }
 
-enum AiProviderStatus { connected, noKey, noFunds, error, disabled, fallback }
+enum AiProviderStatus {
+  connected,
+  noKey,
+  noFunds,
+  limit,
+  unavailable,
+  error,
+  disabled,
+  fallback,
+}
 
 class AiParserController implements AiQueryParser {
   AiParserController({
@@ -104,20 +189,36 @@ class AiParserController implements AiQueryParser {
     required AiQueryParser primary,
     required AiQueryParser fallback,
     required AiProviderStatus initialStatus,
+    AiUsageQuota? usageQuota,
+    String? Function()? actualModel,
+    DateTime Function()? clock,
+    this.rateLimitCooldown = const Duration(minutes: 5),
   }) : _primary = primary,
        _fallback = fallback,
+       _usageQuota = usageQuota,
+       _actualModel = actualModel,
+       _clock = clock ?? DateTime.now,
        status = initialStatus;
 
   final String provider;
   final String model;
   final AiQueryParser _primary;
   final AiQueryParser _fallback;
+  final AiUsageQuota? _usageQuota;
+  final String? Function()? _actualModel;
+  final DateTime Function() _clock;
+  final Duration rateLimitCooldown;
   AiProviderStatus status;
   String? message;
   int providerCalls = 0;
+  DateTime? _cooldownUntil;
+  String? _usedModel;
 
   bool get usesNetworkProvider =>
-      provider == 'gemini' || provider == 'deepseek' || provider == 'yandex';
+      provider == 'openrouter' ||
+      provider == 'gemini' ||
+      provider == 'deepseek' ||
+      provider == 'yandex';
 
   @override
   Future<RememberSearchIntent> parse(RememberSearchRequest request) async {
@@ -127,34 +228,62 @@ class AiParserController implements AiQueryParser {
           : AiProviderStatus.disabled;
       return _fallback.parse(request);
     }
+    final cooldownUntil = _cooldownUntil;
+    if (cooldownUntil != null && _clock().isBefore(cooldownUntil)) {
+      status = AiProviderStatus.unavailable;
+      message = 'AI-провайдер временно недоступен. Использован обычный поиск.';
+      return _fallback.parse(request);
+    }
+    final usageQuota = _usageQuota;
+    var acquiredQuota = false;
+    if (usageQuota != null) {
+      acquiredQuota = await usageQuota.tryAcquire();
+      if (!acquiredQuota) {
+        status = AiProviderStatus.limit;
+        message =
+            'Дневной лимит расширенного анализа достигнут. Использован обычный поиск.';
+        return _fallback.parse(request);
+      }
+    }
     providerCalls += 1;
     try {
       final result = await _primary.parse(request);
+      if (acquiredQuota) await usageQuota!.recordSuccess();
+      _usedModel = _actualModel?.call() ?? _usedModel;
       status = AiProviderStatus.connected;
       message = null;
       return result;
     } on AiProviderException catch (error) {
+      if (acquiredQuota) await usageQuota!.recordFailure();
+      if (error.kind == AiProviderErrorKind.rateLimited) {
+        _cooldownUntil = _clock().add(rateLimitCooldown);
+      }
       status = switch (error.kind) {
         AiProviderErrorKind.missingKey => AiProviderStatus.noKey,
         AiProviderErrorKind.noFunds ||
         AiProviderErrorKind.quotaExceeded => AiProviderStatus.noFunds,
+        AiProviderErrorKind.rateLimited => AiProviderStatus.unavailable,
         _ => AiProviderStatus.error,
       };
       message = error.message;
       return _fallback.parse(request);
     } on TimeoutException {
+      if (acquiredQuota) await usageQuota!.recordFailure();
       status = AiProviderStatus.error;
       message = 'AI-провайдер не ответил вовремя.';
       return _fallback.parse(request);
     } on FormatException {
+      if (acquiredQuota) await usageQuota!.recordFailure();
       status = AiProviderStatus.error;
       message = 'AI-провайдер вернул некорректный JSON.';
       return _fallback.parse(request);
     } on RememberValidationException catch (error) {
+      if (acquiredQuota) await usageQuota!.recordFailure();
       status = AiProviderStatus.error;
       message = error.message;
       return _fallback.parse(request);
     } catch (_) {
+      if (acquiredQuota) await usageQuota!.recordFailure();
       status = AiProviderStatus.error;
       message = 'Ошибка AI-провайдера.';
       return _fallback.parse(request);
@@ -163,20 +292,23 @@ class AiParserController implements AiQueryParser {
 
   Map<String, Object?> toJson() => {
     'provider': switch (provider) {
+      'openrouter' => 'OpenRouter',
       'gemini' => 'Gemini',
       'deepseek' => 'DeepSeek',
       'yandex' => 'YandexGPT',
       _ => 'none',
     },
-    'model': model,
+    'model': _usedModel ?? model,
     'status': status.name,
     if (message != null) 'message': message,
+    if (_usageQuota != null) 'quota': _usageQuota.diagnostics,
   };
 }
 
 AiParserController createAiQueryParser(
   AiSettings settings, {
   http.Client? client,
+  AiUsageQuota? usageQuota,
 }) {
   final fallback = FallbackQueryParser();
   if (!settings.enabled || settings.provider == 'none') {
@@ -189,6 +321,39 @@ AiParserController createAiQueryParser(
     );
   }
   final httpClient = client ?? http.Client();
+  if (settings.provider == 'openrouter') {
+    final key = settings.openRouterApiKey;
+    final quota =
+        usageQuota ??
+        MemoryAiUsageQuota(limit: settings.openRouterLocalDailyLimit);
+    late final OpenRouterQueryParser? primary;
+    if (key != null) {
+      primary = OpenRouterQueryParser(
+        client: httpClient,
+        apiKey: key,
+        baseUrl: settings.openRouterBaseUrl,
+        model: settings.configuredOpenRouterModel,
+        appTitle: settings.openRouterAppTitle,
+        httpReferer: settings.openRouterHttpReferer,
+        timeout: settings.openRouterTimeout,
+        maxTokens: settings.openRouterMaxOutputTokens,
+        requireStructuredOutput: settings.openRouterRequireStructuredOutput,
+      );
+    } else {
+      primary = null;
+    }
+    return AiParserController(
+      provider: 'openrouter',
+      model: settings.configuredOpenRouterModel,
+      primary: primary ?? const MissingKeyQueryParser('OpenRouter'),
+      fallback: fallback,
+      initialStatus: key == null
+          ? AiProviderStatus.noKey
+          : AiProviderStatus.fallback,
+      usageQuota: quota,
+      actualModel: primary == null ? null : () => primary?.actualModel,
+    );
+  }
   if (settings.provider == 'gemini') {
     final key = settings.geminiApiKey;
     return AiParserController(
@@ -262,6 +427,88 @@ AiParserController createAiQueryParser(
   );
 }
 
+class OpenRouterQueryParser implements AiQueryParser {
+  OpenRouterQueryParser({
+    required this.client,
+    required this.apiKey,
+    required this.baseUrl,
+    required this.model,
+    required this.appTitle,
+    required this.httpReferer,
+    required this.timeout,
+    required this.maxTokens,
+    required this.requireStructuredOutput,
+  });
+
+  final http.Client client;
+  final String apiKey;
+  final String baseUrl;
+  final String model;
+  final String? appTitle;
+  final String? httpReferer;
+  final Duration timeout;
+  final int maxTokens;
+  final bool requireStructuredOutput;
+  String? actualModel;
+
+  @override
+  Future<RememberSearchIntent> parse(RememberSearchRequest request) async {
+    final headers = <String, String>{
+      'Authorization': 'Bearer $apiKey',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (httpReferer != null && httpReferer!.isNotEmpty) {
+      headers['HTTP-Referer'] = httpReferer!;
+    }
+    if (appTitle != null && appTitle!.isNotEmpty) {
+      headers['X-Title'] = appTitle!;
+    }
+    final response = await client
+        .post(
+          Uri.parse(
+            '${baseUrl.replaceFirst(RegExp(r'/+$'), '')}/chat/completions',
+          ),
+          headers: headers,
+          body: jsonEncode({
+            'model': model,
+            'messages': [
+              {'role': 'system', 'content': _systemPrompt},
+              {'role': 'user', 'content': _openRouterRequestPayload(request)},
+            ],
+            if (requireStructuredOutput)
+              'response_format': {
+                'type': 'json_schema',
+                'json_schema': {
+                  'name': 'remember_search_intent',
+                  'strict': true,
+                  'schema': _openRouterIntentJsonSchema,
+                },
+              }
+            else
+              'response_format': {'type': 'json_object'},
+            'temperature': 0,
+            'max_tokens': maxTokens.clamp(100, 400),
+            'stream': false,
+          }),
+        )
+        .timeout(timeout);
+    _validateStatus(response, 'OpenRouter');
+    final body = _decodeResponse(response.body, 'OpenRouter');
+    actualModel = body['model'] as String? ?? model;
+    final choices = body['choices'];
+    if (choices is! List || choices.isEmpty || choices.first is! Map) {
+      throw const AiProviderException(
+        AiProviderErrorKind.invalidResponse,
+        'OpenRouter вернул пустой ответ.',
+      );
+    }
+    final message = (choices.first as Map)['message'];
+    final content = message is Map ? message['content'] : null;
+    return _intentFromContent(content, 'OpenRouter');
+  }
+}
+
 class GeminiQueryParser implements AiQueryParser {
   GeminiQueryParser({
     required this.client,
@@ -307,7 +554,7 @@ class GeminiQueryParser implements AiQueryParser {
         'responseFormat': {
           'text': {
             'mimeType': 'application/json',
-            'schema': _rememberIntentJsonSchema,
+            'schema': _openRouterIntentJsonSchema,
           },
         },
       },
@@ -487,7 +734,11 @@ class MissingKeyQueryParser implements AiQueryParser {
 class FallbackQueryParser implements AiQueryParser {
   @override
   Future<RememberSearchIntent> parse(RememberSearchRequest request) async {
+    final normalizer = const QueryNormalizer();
     final text = request.normalizedQuery;
+    final keyboardText = normalizer.swapKeyboardLayout(request.query);
+    final transliteratedText = normalizer.transliterate(request.query);
+    final searchableText = '$text $keyboardText $transliteratedText';
     final types = <String>{};
     if (text.contains('мультсериал') || text.contains('мульт сериал')) {
       types.addAll(const ['animated_series', 'anime']);
@@ -501,17 +752,17 @@ class FallbackQueryParser implements AiQueryParser {
       types.add('movie');
     }
     final genres = <String>{};
-    _addByPattern(text, genres, _genrePatterns);
+    _addByPattern(searchableText, genres, _genrePatterns);
     final countries = <String>{};
-    _addByPattern(text, countries, _countryPatterns);
+    _addByPattern(searchableText, countries, _countryPatterns);
     final plotKeywords = <String>{};
-    _addByPattern(text, plotKeywords, _plotPatterns);
+    _addByPattern(searchableText, plotKeywords, _plotPatterns);
     final titleFragments = _extractQuotedFragments(request.query);
     final characterNames = _extractCharacterNames(request.query);
     final locations = <String>{};
-    _addByPattern(text, locations, _locationPatterns);
+    _addByPattern(searchableText, locations, _locationPatterns);
     final objects = <String>{};
-    _addByPattern(text, objects, _objectPatterns);
+    _addByPattern(searchableText, objects, _objectPatterns);
     final searchVariants = <String>{};
     for (final fragment in [...titleFragments, ...characterNames]) {
       searchVariants.addAll(confirmedTitleAliases(fragment.toLowerCase()));
@@ -523,7 +774,7 @@ class FallbackQueryParser implements AiQueryParser {
         : text.contains('2d') || text.contains('2д') || text.contains('рисован')
         ? '2d'
         : null;
-    final years = _extractYears(text);
+    final years = _extractYears(searchableText);
     return request.applyTo(
       RememberSearchIntent(
         workTypes: types.toList(),
@@ -553,6 +804,8 @@ enum AiProviderErrorKind {
   quotaExceeded,
   regionUnavailable,
   modelUnavailable,
+  invalidRequest,
+  structuredOutputUnavailable,
   timeout,
   invalidResponse,
   unavailable,
@@ -602,29 +855,48 @@ Map<String, dynamic> _decodeResponse(String value, String provider) {
 void _validateStatus(http.Response response, String provider) {
   if (response.statusCode >= 200 && response.statusCode < 300) return;
   final errorBody = response.body.toLowerCase();
-  final kind = switch (response.statusCode) {
-    401 || 403 => AiProviderErrorKind.unauthorized,
-    402 => AiProviderErrorKind.noFunds,
-    404 => AiProviderErrorKind.modelUnavailable,
-    429
-        when errorBody.contains('quota') ||
-            errorBody.contains('resource_exhausted') =>
-      AiProviderErrorKind.quotaExceeded,
-    429 => AiProviderErrorKind.rateLimited,
-    400
-        when errorBody.contains('region') ||
-            errorBody.contains('location') ||
-            errorBody.contains('country') =>
-      AiProviderErrorKind.regionUnavailable,
-    _ => AiProviderErrorKind.unavailable,
-  };
+  final kind = _isRegionUnavailable(errorBody)
+      ? AiProviderErrorKind.regionUnavailable
+      : switch (response.statusCode) {
+          401 || 403 => AiProviderErrorKind.unauthorized,
+          402 => AiProviderErrorKind.noFunds,
+          404 => AiProviderErrorKind.modelUnavailable,
+          429
+              when errorBody.contains('quota') ||
+                  errorBody.contains('resource_exhausted') =>
+            AiProviderErrorKind.quotaExceeded,
+          429 => AiProviderErrorKind.rateLimited,
+          400 || 422
+              when errorBody.contains('json_schema') ||
+                  errorBody.contains('response_format') ||
+                  errorBody.contains('structured') =>
+            AiProviderErrorKind.structuredOutputUnavailable,
+          400 || 422 => AiProviderErrorKind.invalidRequest,
+          _ => AiProviderErrorKind.unavailable,
+        };
   throw AiProviderException(kind, switch (kind) {
     AiProviderErrorKind.unauthorized => '$provider отклонил API-ключ.',
     AiProviderErrorKind.noFunds => 'На балансе $provider нет средств.',
     AiProviderErrorKind.rateLimited => '$provider ограничил частоту запросов.',
+    AiProviderErrorKind.regionUnavailable when provider == 'Gemini' =>
+      'Gemini недоступен в текущем регионе. Используется другой способ анализа.',
+    AiProviderErrorKind.regionUnavailable =>
+      '$provider недоступен в текущем регионе.',
+    AiProviderErrorKind.modelUnavailable =>
+      'Модель $provider временно недоступна.',
+    AiProviderErrorKind.structuredOutputUnavailable =>
+      '$provider не поддержал строгий JSON-ответ.',
+    AiProviderErrorKind.invalidRequest =>
+      '$provider отклонил параметры запроса.',
     _ => '$provider временно недоступен (${response.statusCode}).',
   });
 }
+
+bool _isRegionUnavailable(String body) =>
+    body.contains('this api is not available in your current location') ||
+    body.contains('user location is not supported for the api use') ||
+    (body.contains('failed_precondition') &&
+        (body.contains('location') || body.contains('region')));
 
 Duration _retryAfter(http.Response response) {
   final seconds = int.tryParse(response.headers['retry-after'] ?? '') ?? 1;
@@ -773,7 +1045,18 @@ List<String> _extractCharacterNames(String value) {
   for (final entry in _knownCharacterAliases.entries) {
     if (normalized.contains(entry.key)) names.add(entry.value);
   }
-  return names.take(8).toList();
+  for (final entry in _knownLatinCharacterAliases.entries) {
+    if (RegExp('\\b${entry.key}\\b', caseSensitive: false).hasMatch(value)) {
+      names.add(entry.value);
+    }
+  }
+  for (final match in RegExp(r'\b[A-Z][a-z]{2,40}\b').allMatches(value)) {
+    final candidate = match.group(0)!;
+    if (!_latinStopWords.contains(candidate.toLowerCase())) {
+      names.add(candidate);
+    }
+  }
+  return names.take(15).toList();
 }
 
 const _knownCharacterAliases = {
@@ -784,7 +1067,34 @@ const _knownCharacterAliases = {
   'рик санчез': 'Rick Sanchez',
 };
 
-const Map<String, Object?> _rememberIntentJsonSchema = {
+const _knownLatinCharacterAliases = {
+  'sasuke': 'Sasuke Uchiha',
+  'sakura': 'Sakura Haruno',
+  'madara': 'Madara Uchiha',
+  'naruto': 'Naruto Uzumaki',
+  'ichigo': 'Ichigo Kurosaki',
+};
+
+const _latinStopWords = {
+  'about',
+  'anime',
+  'cartoon',
+  'film',
+  'movie',
+  'series',
+  'the',
+};
+
+String _openRouterRequestPayload(RememberSearchRequest request) => jsonEncode({
+  'description': request.query,
+  'type': request.type,
+  'yearFrom': request.yearFrom,
+  'yearTo': request.yearTo,
+  'country': request.country,
+  'visualStyle': request.visualStyle,
+});
+
+const Map<String, Object?> _openRouterIntentJsonSchema = {
   'type': 'object',
   'additionalProperties': false,
   'properties': {
@@ -818,39 +1128,34 @@ const Map<String, Object?> _rememberIntentJsonSchema = {
     'genres': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 8,
+      'maxItems': 10,
     },
     'plotKeywords': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 16,
+      'maxItems': 20,
     },
     'titleFragments': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 6,
+      'maxItems': 10,
     },
     'characterNames': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 8,
+      'maxItems': 15,
     },
     'franchiseTerms': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 6,
+      'maxItems': 10,
     },
     'locations': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 8,
+      'maxItems': 10,
     },
     'objects': {
-      'type': 'array',
-      'items': {'type': 'string'},
-      'maxItems': 8,
-    },
-    'searchVariants': {
       'type': 'array',
       'items': {'type': 'string'},
       'maxItems': 10,
@@ -858,12 +1163,12 @@ const Map<String, Object?> _rememberIntentJsonSchema = {
     'originalLanguageHints': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 5,
+      'maxItems': 8,
     },
     'countries': {
       'type': 'array',
       'items': {'type': 'string'},
-      'maxItems': 5,
+      'maxItems': 8,
     },
     'visualStyle': {
       'anyOf': [
@@ -898,7 +1203,6 @@ const Map<String, Object?> _rememberIntentJsonSchema = {
     'franchiseTerms',
     'locations',
     'objects',
-    'searchVariants',
     'originalLanguageHints',
     'countries',
     'visualStyle',
@@ -910,7 +1214,7 @@ const Map<String, Object?> _rememberIntentJsonSchema = {
 
 const _systemPrompt = '''
 Верни только один JSON-объект с признаками забытого произведения. Не предлагай и не угадывай названия. Не создавай фильмы, аниме или сериалы. Не возвращай TMDB/AniList ID, обложки, рейтинги или пояснения. Извлекай только признаки из пользовательского текста.
-Допустимые поля: workTypes (movie|series|anime|cartoon|animated_series|documentary), yearFrom, yearTo, genres, plotKeywords, titleFragments, characterNames, franchiseTerms, locations, objects, searchVariants, originalLanguageHints, countries, visualStyle (2d|3d|puppet|unknown|null), targetAudience, negativeKeywords, confidence (0..1). titleFragments содержит только буквально названные пользователем фрагменты, characterNames — только упомянутые имена; не угадывай итоговое произведение. Массивы должны быть короткими, значения жанров и сюжетных признаков — на английском.
-Пример JSON: {"workTypes":["animated_series","anime"],"yearFrom":1995,"yearTo":2012,"genres":["science fiction","adventure"],"plotKeywords":["teenagers","portals","parallel world","mechanical creatures"],"titleFragments":[],"characterNames":[],"franchiseTerms":[],"locations":["parallel world"],"objects":["portals","mechanical creatures"],"searchVariants":[],"originalLanguageHints":[],"countries":[],"visualStyle":null,"targetAudience":null,"negativeKeywords":[],"confidence":0.82}
+Допустимые поля: workTypes (movie|series|anime|cartoon|animated_series|documentary), yearFrom, yearTo, genres, plotKeywords, titleFragments, characterNames, franchiseTerms, locations, objects, originalLanguageHints, countries, visualStyle (2d|3d|puppet|unknown|null), targetAudience, negativeKeywords, confidence (0..1). titleFragments содержит только буквально названные пользователем фрагменты, characterNames — только упомянутые имена; не угадывай итоговое произведение. Массивы должны быть короткими, значения жанров и сюжетных признаков — на английском.
+Пример JSON: {"workTypes":["animated_series","anime"],"yearFrom":1995,"yearTo":2012,"genres":["science fiction","adventure"],"plotKeywords":["teenagers","portals","parallel world","mechanical creatures"],"titleFragments":[],"characterNames":[],"franchiseTerms":[],"locations":["parallel world"],"objects":["portals","mechanical creatures"],"originalLanguageHints":[],"countries":[],"visualStyle":null,"targetAudience":null,"negativeKeywords":[],"confidence":0.82}
 Отвечай только JSON.
 ''';

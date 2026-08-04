@@ -11,6 +11,7 @@ import 'catalog_gateway.dart';
 import 'media_alias_store.dart';
 import 'ai_intent_cache.dart';
 import 'ai_query_parser.dart';
+import 'ai_usage_quota.dart';
 import 'remember_models.dart';
 import 'remember_search_service.dart';
 import 'recommendation_service.dart';
@@ -23,6 +24,7 @@ export 'media_alias_store.dart';
 export 'query_normalizer.dart';
 export 'ai_intent_cache.dart';
 export 'ai_query_parser.dart';
+export 'ai_usage_quota.dart';
 export 'remember_models.dart';
 export 'remember_search_service.dart';
 export 'recommendation_service.dart';
@@ -38,6 +40,7 @@ Future<HttpServer> startKadroskopServer({
   AiSettings? aiSettings,
   AiParserController? aiParser,
   AiIntentCache? aiIntentCache,
+  AiUsageQuota? aiUsageQuota,
   RememberSearchService? rememberSearchService,
   RecommendationService? recommendationService,
   SimilarityService? similarityService,
@@ -59,14 +62,22 @@ Future<HttpServer> startKadroskopServer({
       );
   final settings =
       aiSettings ?? AiSettings.fromEnvironment(const {'AI_ENABLED': 'false'});
-  final parser = aiParser ?? createAiQueryParser(settings);
+  final quota =
+      aiUsageQuota ??
+      (aiSettings == null || settings.provider != 'openrouter'
+          ? const NoopAiUsageQuota()
+          : SqliteAiUsageQuota(
+              path: aiCachePath,
+              limit: settings.openRouterLocalDailyLimit,
+            ));
+  final parser = aiParser ?? createAiQueryParser(settings, usageQuota: quota);
   final intentCache =
       aiIntentCache ??
       (aiSettings == null
           ? MemoryAiIntentCache()
           : SqliteAiIntentCache(
               path: aiCachePath,
-              ttl: Duration(hours: settings.cacheHours),
+              ttl: settings.intentCacheTtl,
             ));
   final remember =
       rememberSearchService ??
