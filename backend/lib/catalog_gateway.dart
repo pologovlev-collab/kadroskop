@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
 import 'catalog_provider.dart';
 import 'catalog_providers.dart';
+import 'media_alias_store.dart';
+import 'query_normalizer.dart';
 
 class CatalogSettings {
   const CatalogSettings({
@@ -87,6 +90,7 @@ class CatalogGateway {
     String? tmdbToken,
     Duration requestTimeout = const Duration(seconds: 12),
     CatalogSettings? settings,
+    MediaAliasStore? aliasStore,
   }) : _settings =
            settings ??
            CatalogSettings(
@@ -94,7 +98,8 @@ class CatalogGateway {
              requestTimeout: requestTimeout,
            ),
        _tmdbToken = _cleanSecret(settings?.tmdbToken ?? tmdbToken),
-       _requestTimeout = settings?.requestTimeout ?? requestTimeout {
+       _requestTimeout = settings?.requestTimeout ?? requestTimeout,
+       _aliasStore = aliasStore ?? MemoryMediaAliasStore() {
     _providers = [
       TmdbCatalogProvider(
         enabled: _settings.tmdbEnabled && tmdbConfigured,
@@ -137,6 +142,9 @@ class CatalogGateway {
   final CatalogSettings _settings;
   final String? _tmdbToken;
   final Duration _requestTimeout;
+  final MediaAliasStore _aliasStore;
+  final QueryNormalizer _queryNormalizer = const QueryNormalizer();
+  final QueryVariantGenerator _queryVariants = const QueryVariantGenerator();
   late final List<CatalogProvider> _providers;
   final _cache = _MemoryCache();
   final Map<String, ProviderHealth> _health = {};
@@ -159,22 +167,30 @@ class CatalogGateway {
     String? kind,
     int page = 1,
   }) async {
-    final normalized = _normalizeQuery(query);
+    final normalized = _queryNormalizer.normalize(query);
     final safePage = _safePage(page);
-    final cacheKey = 'search:$normalized:$kind:$safePage';
+    final cachedAliases = await _aliasStore.aliasesForQuery(normalized);
+    final variants = _queryVariants.generate(
+      query,
+      cachedAliases: cachedAliases,
+    );
+    final cacheKey =
+        'search:$normalized:$kind:$safePage:${variants.map((item) => item.value).join('|')}';
     final cached = _cache.read<CatalogSearchPage>(cacheKey);
     if (cached != null) return cached;
 
-    final request = CatalogProviderRequest(
-      query: normalized,
-      kind: kind,
-      page: safePage,
-    );
     final operations = _providers
         .where((provider) => provider.enabled && provider.supportsKind(kind))
         .map(
-          (provider) =>
-              _ProviderOperation(provider.name, () => provider.search(request)),
+          (provider) => _ProviderOperation(
+            provider.name,
+            () => _searchProviderVariants(
+              provider,
+              variants,
+              kind: kind,
+              page: safePage,
+            ),
+          ),
         )
         .toList();
 
@@ -184,7 +200,13 @@ class CatalogGateway {
         503,
       );
     }
-    final value = await _runOperations(operations, kind: kind, page: safePage);
+    final value = await _runOperations(
+      operations,
+      kind: kind,
+      page: safePage,
+      queryVariants: variants,
+      recordAliases: true,
+    );
     _cache.write(cacheKey, value, ttl: _settings.cacheTtl);
     return value;
   }
@@ -257,10 +279,36 @@ class CatalogGateway {
     return _runOperations(operations, kind: null, page: safePage);
   }
 
+  Future<List<CatalogMedia>> _searchProviderVariants(
+    CatalogProvider provider,
+    List<QueryVariant> variants, {
+    required String? kind,
+    required int page,
+  }) async {
+    final prioritized = [...variants]
+      ..sort(
+        (left, right) => _variantPriority(
+          provider.name,
+          left.type,
+        ).compareTo(_variantPriority(provider.name, right.type)),
+      );
+    final results = <CatalogMedia>[];
+    for (final variant in prioritized.take(3)) {
+      results.addAll(
+        await provider.search(
+          CatalogProviderRequest(query: variant.value, kind: kind, page: page),
+        ),
+      );
+    }
+    return results;
+  }
+
   Future<CatalogSearchPage> _runOperations(
     List<_ProviderOperation> operations, {
     required String? kind,
     required int page,
+    List<QueryVariant> queryVariants = const [],
+    bool recordAliases = false,
   }) async {
     final settled = await Future.wait(operations.map(_settle));
     final successes = settled.where((result) => result.error == null).toList();
@@ -297,8 +345,24 @@ class CatalogGateway {
         confidence: confidence,
       );
     }
+    if (queryVariants.isNotEmpty) {
+      deduplicated.sort(
+        (left, right) => _searchRank(
+          right,
+          queryVariants,
+        ).compareTo(_searchRank(left, queryVariants)),
+      );
+    }
+    if (recordAliases) await _aliasStore.record(deduplicated);
+    final jsonResults = deduplicated.take(40).map((item) {
+      final json = item.toJson();
+      if (queryVariants.isNotEmpty) {
+        json['searchScore'] = _searchRank(item, queryVariants);
+      }
+      return json;
+    }).toList();
     return CatalogSearchPage(
-      results: deduplicated.take(40).map((item) => item.toJson()).toList(),
+      results: jsonResults,
       page: page,
       hasMore: successes.any((result) => result.items.length >= 20),
       warnings: failures.map((failure) => failure.error!).toSet().toList(),
@@ -366,7 +430,9 @@ class CatalogGateway {
     }
     late final Map<String, Object?> result;
     try {
-      result = (await provider.details(source, id)).toJson();
+      final media = await provider.details(source, id);
+      result = media.toJson();
+      await _aliasStore.record([media]);
       _health[provider.name] = ProviderHealth(
         provider: provider.name,
         state: ProviderState.connected,
@@ -1001,9 +1067,6 @@ Map<String, dynamic> _decodeObject(String body, {required String provider}) {
   throw CatalogException('$provider вернул некорректный JSON.', 502);
 }
 
-String _normalizeQuery(String value) =>
-    value.trim().replaceAll(RegExp(r'\s+'), ' ');
-
 int _safePage(int value) => value < 1 ? 1 : (value > 50 ? 50 : value);
 
 bool _providerMatchesWorkTypes(String provider, List<String> workTypes) {
@@ -1048,6 +1111,80 @@ double? _dedupeConfidence(CatalogMedia first, CatalogMedia second) {
     ..remove('');
   if (firstTitles.intersection(secondTitles).isEmpty) return null;
   return first.year == second.year ? .9 : .84;
+}
+
+int _variantPriority(String provider, QueryVariantType type) {
+  if (provider == 'tmdb') {
+    return switch (type) {
+      QueryVariantType.original => 0,
+      QueryVariantType.normalized => 1,
+      QueryVariantType.alias => 2,
+      QueryVariantType.keyboard => 3,
+      QueryVariantType.transliteration => 4,
+    };
+  }
+  return switch (type) {
+    QueryVariantType.alias => 0,
+    QueryVariantType.original => 1,
+    QueryVariantType.keyboard => 2,
+    QueryVariantType.transliteration => 3,
+    QueryVariantType.normalized => 4,
+  };
+}
+
+double _searchRank(CatalogMedia media, List<QueryVariant> variants) {
+  var best = 0.0;
+  final titles = media.titleVariants
+      .map(_normalizedTitle)
+      .where((title) => title.isNotEmpty);
+  for (final variant in variants) {
+    final query = _normalizedTitle(variant.value);
+    if (query.isEmpty) continue;
+    final penalty = switch (variant.type) {
+      QueryVariantType.original || QueryVariantType.alias => 0,
+      QueryVariantType.normalized => 1,
+      QueryVariantType.keyboard => 3,
+      QueryVariantType.transliteration => 4,
+    };
+    for (final title in titles) {
+      final score = title == query
+          ? 100.0 - penalty
+          : title.startsWith(query)
+          ? 91.0 - penalty
+          : title.contains(query)
+          ? 82.0 - penalty
+          : 68.0 * _stringSimilarity(title, query) - penalty;
+      if (score > best) best = score;
+    }
+  }
+  final popularityTieBreaker = (media.popularity / 500000).clamp(0, 1.5);
+  return double.parse((best + popularityTieBreaker).toStringAsFixed(3));
+}
+
+double _stringSimilarity(String first, String second) {
+  if (first == second) return 1;
+  final maxLength = math.max(first.length, second.length);
+  if (maxLength == 0) return 1;
+  return 1 - (_levenshtein(first, second) / maxLength);
+}
+
+int _levenshtein(String first, String second) {
+  var previous = List<int>.generate(second.length + 1, (index) => index);
+  for (var firstIndex = 0; firstIndex < first.length; firstIndex += 1) {
+    final current = <int>[firstIndex + 1];
+    for (var secondIndex = 0; secondIndex < second.length; secondIndex += 1) {
+      final insertion = current[secondIndex] + 1;
+      final deletion = previous[secondIndex + 1] + 1;
+      final substitution =
+          previous[secondIndex] +
+          (first.codeUnitAt(firstIndex) == second.codeUnitAt(secondIndex)
+              ? 0
+              : 1);
+      current.add(math.min(insertion, math.min(deletion, substitution)));
+    }
+    previous = current;
+  }
+  return previous.last;
 }
 
 bool _compatibleFormats(String? first, String? second) {

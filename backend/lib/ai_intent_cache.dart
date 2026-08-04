@@ -29,6 +29,8 @@ class SqliteAiIntentCache implements AiIntentCache {
     required this.ttl,
     Database? database,
   }) : _database = database ?? _open(path) {
+    _database.execute('PRAGMA busy_timeout = 3000');
+    _database.execute('PRAGMA journal_mode = WAL');
     _database.execute('''
       CREATE TABLE IF NOT EXISTS ai_intent_cache (
         normalized_query TEXT NOT NULL,

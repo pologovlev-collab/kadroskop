@@ -8,6 +8,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 
 import 'catalog_gateway.dart';
+import 'media_alias_store.dart';
 import 'ai_intent_cache.dart';
 import 'ai_query_parser.dart';
 import 'remember_models.dart';
@@ -16,6 +17,8 @@ import 'remember_search_service.dart';
 export 'catalog_gateway.dart';
 export 'catalog_provider.dart';
 export 'catalog_providers.dart';
+export 'media_alias_store.dart';
+export 'query_normalizer.dart';
 export 'ai_intent_cache.dart';
 export 'ai_query_parser.dart';
 export 'remember_models.dart';
@@ -26,6 +29,7 @@ Future<HttpServer> startKadroskopServer({
   required int port,
   String? tmdbToken,
   CatalogSettings? catalogSettings,
+  MediaAliasStore? mediaAliasStore,
   CatalogGateway? catalogGateway,
   AiSettings? aiSettings,
   AiParserController? aiParser,
@@ -33,12 +37,18 @@ Future<HttpServer> startKadroskopServer({
   RememberSearchService? rememberSearchService,
   String aiCachePath = 'data/kadroskop_backend.db',
 }) {
+  final aliases =
+      mediaAliasStore ??
+      (catalogSettings == null
+          ? MemoryMediaAliasStore()
+          : SqliteMediaAliasStore(path: aiCachePath));
   final catalog =
       catalogGateway ??
       CatalogGateway(
         http.Client(),
         tmdbToken: tmdbToken,
         settings: catalogSettings,
+        aliasStore: aliases,
       );
   final settings =
       aiSettings ?? AiSettings.fromEnvironment(const {'AI_ENABLED': 'false'});
