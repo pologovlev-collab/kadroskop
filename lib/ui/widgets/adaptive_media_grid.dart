@@ -12,6 +12,7 @@ class AdaptiveMediaGrid extends StatelessWidget {
     required this.onOpen,
     this.cardBuilder,
     this.onFavorite,
+    this.onSimilar,
   });
 
   final List<MediaItem> items;
@@ -19,6 +20,7 @@ class AdaptiveMediaGrid extends StatelessWidget {
   final Widget Function(BuildContext context, MediaItem item, double width)?
   cardBuilder;
   final void Function(MediaItem item, bool favorite)? onFavorite;
+  final ValueChanged<MediaItem>? onSimilar;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -44,6 +46,7 @@ class AdaptiveMediaGrid extends StatelessWidget {
                   onFavorite: onFavorite == null
                       ? null
                       : (favorite) => onFavorite!(item, favorite),
+                  onSimilar: onSimilar == null ? null : () => onSimilar!(item),
                   width: width,
                 ),
         ],

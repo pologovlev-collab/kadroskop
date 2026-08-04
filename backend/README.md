@@ -50,6 +50,7 @@ JSON-схеме. Пустой, ошибочный или
 - `GET /v1/popular?page=1&kind=movie`
 - `GET /v1/search?q=название&page=1&kind=movie`
 - `GET /v1/media/{source}/{externalId}`
+- `GET /v1/media/{source}/{externalId}/similar?mode=overall&page=1`
 - `GET /v1/recommendations/for-you?seeds=source:id:weight&kind=all&page=1`
 - `POST /remember/search`
 
@@ -59,6 +60,11 @@ JSON-схеме. Пустой, ошибочный или
 произведения исключаются из выдачи. Результаты берутся из официальных
 recommendation/similar endpoints, дедуплицируются, получают понятные причины и
 кэшируются на срок `RECOMMENDATIONS_CACHE_HOURS`.
+
+Режимы похожести: `overall`, `plot`, `genres`, `atmosphere`, `characters`.
+Backend объединяет официальные recommendations/similar/relations, а затем
+локально учитывает жанры, теги, сюжетные слова, описания, студию, персонажей,
+страну, язык, формат и год. AI в этом процессе не вызывается.
 
 Поддерживаемые значения `kind`: `movie`, `series`, `anime`, `cartoon`,
 `animatedSeries`, `documentary`.

@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../models/media_item.dart';
 import '../models/recommendation.dart';
 import '../models/remember_search.dart';
+import '../models/similar_media.dart';
 import 'media_repository.dart';
 
 class CatalogApi implements CatalogSource {
@@ -127,6 +128,47 @@ class CatalogApi implements CatalogSource {
           .map(
             (row) => RecommendationItem.fromJson(row.cast<String, dynamic>()),
           )
+          .toList(),
+      page: ((data['page'] as num?) ?? page).toInt(),
+      hasMore: data['hasMore'] == true,
+      warnings: (data['warnings'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
+      guidance: data['guidance'] as String?,
+    );
+  }
+
+  @override
+  Future<SimilarMediaPage> similar(
+    MediaItem item, {
+    SimilarMode mode = SimilarMode.overall,
+    int page = 1,
+    bool refresh = false,
+  }) async {
+    final id = item.externalId;
+    if (id == null) {
+      return const SimilarMediaPage(
+        items: [],
+        page: 1,
+        hasMore: false,
+        warnings: [],
+        guidance: 'У произведения нет внешнего идентификатора.',
+      );
+    }
+    final uri = _baseUrl
+        .resolve('/v1/media/${item.source}/$id/similar')
+        .replace(
+          queryParameters: {
+            'mode': mode.name,
+            'page': '$page',
+            if (refresh) 'refresh': 'true',
+          },
+        );
+    final data = await _getJson(uri);
+    return SimilarMediaPage(
+      items: (data['results'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((row) => SimilarMediaItem.fromJson(row.cast<String, dynamic>()))
           .toList(),
       page: ((data['page'] as num?) ?? page).toInt(),
       hasMore: data['hasMore'] == true,

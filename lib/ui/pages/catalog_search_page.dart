@@ -14,12 +14,14 @@ class CatalogSearchPage extends StatefulWidget {
     required this.repository,
     required this.onOpen,
     required this.onFavorite,
+    required this.onSimilar,
     this.initialKind,
   });
 
   final MediaRepository repository;
   final ValueChanged<MediaItem> onOpen;
   final void Function(MediaItem item, bool favorite) onFavorite;
+  final ValueChanged<MediaItem> onSimilar;
   final MediaKind? initialKind;
 
   @override
@@ -218,6 +220,7 @@ class _CatalogSearchPageState extends State<CatalogSearchPage> {
               items: _results,
               onOpen: widget.onOpen,
               onFavorite: widget.onFavorite,
+              onSimilar: widget.onSimilar,
             ),
             if (_hasMore) ...[
               const SizedBox(height: 26),

@@ -51,6 +51,24 @@ void main() {
     expect(find.text('Лунный страж'), findsOneWidget);
     expect(find.text('Интерстеллар'), findsNothing);
   });
+
+  testWidgets('similar button opens a mode-aware modal', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      KadroskopApp(repository: MemoryMediaRepository(_items)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Похожие произведения').first);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Похожие на «'), findsOneWidget);
+    expect(find.text('Общее'), findsOneWidget);
+    expect(find.text('По сюжету'), findsOneWidget);
+    expect(find.text('По жанрам'), findsOneWidget);
+  });
 }
 
 const _items = [

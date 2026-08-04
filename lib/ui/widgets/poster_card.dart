@@ -13,6 +13,7 @@ class PosterCard extends StatelessWidget {
     this.width = 186,
     this.compact = false,
     this.onFavorite,
+    this.onSimilar,
     this.supportingText,
   });
 
@@ -21,6 +22,7 @@ class PosterCard extends StatelessWidget {
   final double width;
   final bool compact;
   final ValueChanged<bool>? onFavorite;
+  final VoidCallback? onSimilar;
   final String? supportingText;
 
   @override
@@ -50,6 +52,16 @@ class PosterCard extends StatelessWidget {
                       child: _CardFavoriteButton(
                         initialValue: item.isFavorite,
                         onChanged: onFavorite!,
+                      ),
+                    ),
+                  if (onSimilar != null)
+                    Positioned(
+                      top: onFavorite == null ? 10 : 58,
+                      right: 10,
+                      child: IconButton.filledTonal(
+                        tooltip: 'Похожие произведения',
+                        onPressed: onSimilar,
+                        icon: const Icon(Icons.hub_outlined),
                       ),
                     ),
                 ],

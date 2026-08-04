@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kadroskop/data/media_repository.dart';
 import 'package:kadroskop/data/local_database.dart';
 import 'package:kadroskop/models/media_item.dart';
+import 'package:kadroskop/models/similar_media.dart';
 
 void main() {
   test('tracks individual episodes and whole series', () async {
@@ -71,6 +72,20 @@ void main() {
       isEmpty,
     );
   });
+
+  test(
+    'similar modes return only other items with shared catalog data',
+    () async {
+      final repository = MemoryMediaRepository([series, similarSeries]);
+
+      final result = await repository.loadSimilar(
+        series,
+        mode: SimilarMode.genres,
+      );
+
+      expect(result.items.single.media.id, similarSeries.id);
+    },
+  );
 }
 
 const series = MediaItem(
@@ -90,4 +105,16 @@ const series = MediaItem(
     SeasonInfo(number: 1, episodeCount: 2),
     SeasonInfo(number: 2, episodeCount: 2),
   ],
+);
+
+const similarSeries = MediaItem(
+  id: 43,
+  title: 'Другой архив',
+  subtitle: 'Сериал',
+  description: 'Другое описание',
+  year: 2024,
+  kind: MediaKind.series,
+  rating: 7.9,
+  genres: ['Детектив'],
+  colors: [Color(0xFF101A2C), Color(0xFF8B3D56)],
 );

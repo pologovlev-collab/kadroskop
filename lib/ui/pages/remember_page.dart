@@ -13,11 +13,13 @@ class RememberPage extends StatefulWidget {
     required this.repository,
     required this.onOpen,
     required this.onFavorite,
+    required this.onExploreSimilar,
   });
 
   final MediaRepository repository;
   final ValueChanged<MediaItem> onOpen;
   final void Function(MediaItem item, bool favorite) onFavorite;
+  final ValueChanged<MediaItem> onExploreSimilar;
 
   @override
   State<RememberPage> createState() => _RememberPageState();
@@ -194,6 +196,7 @@ class _RememberPageState extends State<RememberPage> {
                   total: _candidates.length,
                   onOpen: widget.onOpen,
                   onFavorite: widget.onFavorite,
+                  onExploreSimilar: widget.onExploreSimilar,
                   onExclude: (candidate) {
                     _exclude(candidate);
                     if (_candidates.isNotEmpty) {
@@ -210,6 +213,7 @@ class _RememberPageState extends State<RememberPage> {
                   candidates: _candidates,
                   onOpen: widget.onOpen,
                   onFavorite: widget.onFavorite,
+                  onExploreSimilar: widget.onExploreSimilar,
                   onExclude: _exclude,
                   onSimilar: _similar,
                 ),
@@ -430,12 +434,14 @@ class _CandidateGrid extends StatelessWidget {
     required this.candidates,
     required this.onOpen,
     required this.onFavorite,
+    required this.onExploreSimilar,
     required this.onExclude,
     required this.onSimilar,
   });
   final List<RememberCandidate> candidates;
   final ValueChanged<MediaItem> onOpen;
   final void Function(MediaItem item, bool favorite) onFavorite;
+  final ValueChanged<MediaItem> onExploreSimilar;
   final ValueChanged<RememberCandidate> onExclude;
   final Future<void> Function(RememberCandidate) onSimilar;
   @override
@@ -459,6 +465,7 @@ class _CandidateGrid extends StatelessWidget {
                 candidate: candidate,
                 onOpen: onOpen,
                 onFavorite: onFavorite,
+                onExploreSimilar: onExploreSimilar,
                 onExclude: onExclude,
                 onSimilar: onSimilar,
               ),
@@ -475,12 +482,14 @@ class _CandidateCard extends StatelessWidget {
     required this.candidate,
     required this.onOpen,
     required this.onFavorite,
+    required this.onExploreSimilar,
     required this.onExclude,
     required this.onSimilar,
   });
   final RememberCandidate candidate;
   final ValueChanged<MediaItem> onOpen;
   final void Function(MediaItem item, bool favorite) onFavorite;
+  final ValueChanged<MediaItem> onExploreSimilar;
   final ValueChanged<RememberCandidate> onExclude;
   final Future<void> Function(RememberCandidate) onSimilar;
 
@@ -590,6 +599,11 @@ class _CandidateCard extends StatelessWidget {
                 initialValue: item.isFavorite,
                 onChanged: (favorite) => onFavorite(item, favorite),
               ),
+              IconButton.outlined(
+                tooltip: 'Похожие произведения',
+                onPressed: () => onExploreSimilar(item),
+                icon: const Icon(Icons.hub_outlined),
+              ),
             ],
           ),
         ],
@@ -635,6 +649,7 @@ class _CandidateDeck extends StatelessWidget {
     required this.total,
     required this.onOpen,
     required this.onFavorite,
+    required this.onExploreSimilar,
     required this.onExclude,
     required this.onSimilar,
     required this.onNext,
@@ -644,6 +659,7 @@ class _CandidateDeck extends StatelessWidget {
   final int total;
   final ValueChanged<MediaItem> onOpen;
   final void Function(MediaItem item, bool favorite) onFavorite;
+  final ValueChanged<MediaItem> onExploreSimilar;
   final ValueChanged<RememberCandidate> onExclude;
   final Future<void> Function(RememberCandidate) onSimilar;
   final VoidCallback onNext;
@@ -668,6 +684,7 @@ class _CandidateDeck extends StatelessWidget {
               candidate: candidate,
               onOpen: onOpen,
               onFavorite: onFavorite,
+              onExploreSimilar: onExploreSimilar,
               onExclude: onExclude,
               onSimilar: onSimilar,
             ),

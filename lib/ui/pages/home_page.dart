@@ -18,6 +18,7 @@ class HomePage extends StatelessWidget {
     required this.selectedKind,
     required this.onOpen,
     required this.onFavorite,
+    required this.onSimilar,
     required this.onRecall,
     required this.onSelectKind,
     required this.onOpenSearch,
@@ -35,6 +36,7 @@ class HomePage extends StatelessWidget {
   final MediaKind? selectedKind;
   final ValueChanged<MediaItem> onOpen;
   final void Function(MediaItem item, bool favorite) onFavorite;
+  final ValueChanged<MediaItem> onSimilar;
   final VoidCallback onRecall;
   final ValueChanged<MediaKind?> onSelectKind;
   final VoidCallback onOpenSearch;
@@ -111,6 +113,7 @@ class HomePage extends StatelessWidget {
                       width: width,
                       onTap: () => onOpen(item),
                       onFavorite: (favorite) => onFavorite(item, favorite),
+                      onSimilar: () => onSimilar(item),
                       supportingText: entry.reasons.firstOrNull,
                     );
                   },

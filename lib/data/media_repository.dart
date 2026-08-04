@@ -8,6 +8,7 @@ import '../models/app_profile.dart';
 import '../models/media_item.dart';
 import '../models/recommendation.dart';
 import '../models/remember_search.dart';
+import '../models/similar_media.dart';
 import 'local_database.dart';
 
 abstract interface class CatalogSource {
@@ -20,6 +21,12 @@ abstract interface class CatalogSource {
     required List<RecommendationSeed> seeds,
     Set<String> excluded = const {},
     MediaKind? kind,
+    int page = 1,
+    bool refresh = false,
+  });
+  Future<SimilarMediaPage> similar(
+    MediaItem item, {
+    SimilarMode mode = SimilarMode.overall,
     int page = 1,
     bool refresh = false,
   });
@@ -39,6 +46,12 @@ abstract interface class MediaRepository {
   Future<RememberSearchResult> rememberSearch(RememberSearchFilters filters);
   Future<RecommendationPage> loadRecommendations({
     MediaKind? kind,
+    int page = 1,
+    bool refresh = false,
+  });
+  Future<SimilarMediaPage> loadSimilar(
+    MediaItem item, {
+    SimilarMode mode = SimilarMode.overall,
     int page = 1,
     bool refresh = false,
   });
@@ -268,6 +281,58 @@ class LocalMediaRepository implements MediaRepository {
       hasMore: pageResult.hasMore,
       warnings: pageResult.warnings,
       guidance: pageResult.guidance,
+    );
+  }
+
+  @override
+  Future<SimilarMediaPage> loadSimilar(
+    MediaItem item, {
+    SimilarMode mode = SimilarMode.overall,
+    int page = 1,
+    bool refresh = false,
+  }) async {
+    if (_catalog == null || item.externalId == null) {
+      return const SimilarMediaPage(
+        items: [],
+        page: 1,
+        hasMore: false,
+        warnings: [],
+        guidance: 'Для локального произведения похожие пока недоступны.',
+      );
+    }
+    final result = await _catalog.similar(
+      item,
+      mode: mode,
+      page: page,
+      refresh: refresh,
+    );
+    final local = await loadMedia();
+    final byIdentity = {
+      for (final saved in local)
+        if (saved.externalId != null)
+          '${saved.source}:${saved.externalId}': saved,
+    };
+    return SimilarMediaPage(
+      items: result.items.map((entry) {
+        final saved =
+            byIdentity['${entry.media.source}:${entry.media.externalId}'];
+        if (saved == null) return entry;
+        return SimilarMediaItem(
+          media: entry.media.copyWith(
+            status: saved.status,
+            userRating: saved.userRating,
+            isFavorite: saved.isFavorite,
+            favoriteUpdatedAt: saved.favoriteUpdatedAt,
+          ),
+          score: entry.score,
+          reasons: entry.reasons,
+          breakdown: entry.breakdown,
+        );
+      }).toList(),
+      page: result.page,
+      hasMore: result.hasMore,
+      warnings: result.warnings,
+      guidance: result.guidance,
     );
   }
 
@@ -767,6 +832,39 @@ class MemoryMediaRepository implements MediaRepository {
       hasMore: false,
       warnings: const [],
       guidance: values.isEmpty ? 'Добавьте произведения в избранное.' : null,
+    );
+  }
+
+  @override
+  Future<SimilarMediaPage> loadSimilar(
+    MediaItem item, {
+    SimilarMode mode = SimilarMode.overall,
+    int page = 1,
+    bool refresh = false,
+  }) async {
+    final normalizedGenres = item.genres.map((genre) => genre.toLowerCase());
+    final values = items
+        .where((candidate) => candidate.id != item.id)
+        .where(
+          (candidate) => candidate.genres.any(
+            (genre) => normalizedGenres.contains(genre.toLowerCase()),
+          ),
+        )
+        .map(
+          (candidate) => SimilarMediaItem(
+            media: candidate,
+            score: 50,
+            reasons: const ['Совпадают жанры'],
+            breakdown: const {'genres': 50},
+          ),
+        )
+        .toList();
+    return SimilarMediaPage(
+      items: values,
+      page: page,
+      hasMore: false,
+      warnings: const [],
+      guidance: values.isEmpty ? 'Похожие произведения не найдены.' : null,
     );
   }
 

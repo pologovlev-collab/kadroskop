@@ -14,6 +14,7 @@ import 'ai_query_parser.dart';
 import 'remember_models.dart';
 import 'remember_search_service.dart';
 import 'recommendation_service.dart';
+import 'similarity_service.dart';
 
 export 'catalog_gateway.dart';
 export 'catalog_provider.dart';
@@ -25,6 +26,7 @@ export 'ai_query_parser.dart';
 export 'remember_models.dart';
 export 'remember_search_service.dart';
 export 'recommendation_service.dart';
+export 'similarity_service.dart';
 
 Future<HttpServer> startKadroskopServer({
   required InternetAddress address,
@@ -38,6 +40,7 @@ Future<HttpServer> startKadroskopServer({
   AiIntentCache? aiIntentCache,
   RememberSearchService? rememberSearchService,
   RecommendationService? recommendationService,
+  SimilarityService? similarityService,
   Duration recommendationCacheTtl = const Duration(hours: 6),
   String aiCachePath = 'data/kadroskop_backend.db',
 }) {
@@ -78,6 +81,9 @@ Future<HttpServer> startKadroskopServer({
         catalog,
         cacheTtl: recommendationCacheTtl,
       );
+  final similarity =
+      similarityService ??
+      SimilarityService.forCatalog(catalog, cacheTtl: recommendationCacheTtl);
   final router = Router()
     ..get('/v1/health', (Request request) {
       return _json({
@@ -160,6 +166,34 @@ Future<HttpServer> startKadroskopServer({
     ) async {
       try {
         return _json(await catalog.details(source, id));
+      } on CatalogException catch (error) {
+        return _json({'error': error.message}, statusCode: error.statusCode);
+      }
+    })
+    ..get('/v1/media/<source>/<id>/similar', (
+      Request request,
+      String source,
+      String id,
+    ) async {
+      final modeName = request.url.queryParameters['mode'] ?? 'overall';
+      final mode = SimilarityMode.values
+          .where((value) => value.name == modeName)
+          .firstOrNull;
+      if (mode == null) {
+        return _json({
+          'error': 'Неизвестный режим похожести.',
+        }, statusCode: HttpStatus.badRequest);
+      }
+      try {
+        return _json(
+          await similarity.search(
+            source: source,
+            sourceId: id,
+            mode: mode,
+            page: _page(request),
+            refresh: request.url.queryParameters['refresh'] == 'true',
+          ),
+        );
       } on CatalogException catch (error) {
         return _json({'error': error.message}, statusCode: error.statusCode);
       }

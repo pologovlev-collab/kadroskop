@@ -13,6 +13,7 @@ import 'pages/home_page.dart';
 import 'pages/library_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/remember_page.dart';
+import 'pages/similar_media_sheet.dart';
 import 'widgets/poster_card.dart';
 
 class KadroskopApp extends StatefulWidget {
@@ -210,6 +211,25 @@ class _KadroskopShellState extends State<KadroskopShell> {
         onEpisodesChanged: _reload,
         onRating: (rating) => _setRating(detailed, rating),
         onFavorite: (favorite) => _setFavorite(detailed, favorite),
+        onSimilar: () {
+          Navigator.pop(context);
+          _showSimilar(detailed);
+        },
+      ),
+    );
+  }
+
+  void _showSimilar(MediaItem item) {
+    widget.repository.recordInteraction(item, 'similar_opened');
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => SimilarMediaSheet(
+        reference: item,
+        repository: widget.repository,
+        onOpen: _openDetails,
+        onFavorite: _setFavorite,
       ),
     );
   }
@@ -235,6 +255,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
             selectedKind: _recommendationKind,
             onOpen: _openDetails,
             onFavorite: _setFavorite,
+            onSimilar: _showSimilar,
             onRecall: () => setState(() => _index = 2),
             onSelectKind: _selectRecommendationKind,
             onOpenSearch: () => setState(() {
@@ -250,17 +271,20 @@ class _KadroskopShellState extends State<KadroskopShell> {
             initialKind: _searchKind,
             onOpen: _openDetails,
             onFavorite: _setFavorite,
+            onSimilar: _showSimilar,
           ),
           2 => RememberPage(
             repository: widget.repository,
             onOpen: _openDetails,
             onFavorite: _setFavorite,
+            onExploreSimilar: _showSimilar,
           ),
           3 => LibraryPage(
             items: _items,
             onOpen: _openDetails,
             onSetStatus: _setStatus,
             onFavorite: _setFavorite,
+            onSimilar: _showSimilar,
           ),
           4 => _StatisticsPage(items: _items, repository: widget.repository),
           _ => ProfilePage(
@@ -2181,6 +2205,7 @@ class _DetailsSheet extends StatelessWidget {
     required this.onEpisodesChanged,
     required this.onRating,
     required this.onFavorite,
+    required this.onSimilar,
   });
   final MediaItem item;
   final MediaRepository repository;
@@ -2188,6 +2213,7 @@ class _DetailsSheet extends StatelessWidget {
   final Future<void> Function() onEpisodesChanged;
   final Future<void> Function(double? rating) onRating;
   final Future<void> Function(bool favorite) onFavorite;
+  final VoidCallback onSimilar;
 
   @override
   Widget build(BuildContext context) {
@@ -2348,6 +2374,11 @@ class _DetailsSheet extends StatelessWidget {
                           _FavoriteAction(
                             initialValue: item.isFavorite,
                             onChanged: onFavorite,
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: onSimilar,
+                            icon: const Icon(Icons.hub_outlined),
+                            label: const Text('Похожее'),
                           ),
                         ],
                       ),

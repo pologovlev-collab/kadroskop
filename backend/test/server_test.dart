@@ -300,4 +300,58 @@ void main() {
       isNotEmpty,
     );
   });
+
+  test('GET /v1/media/:source/:id/similar forwards the selected mode', () async {
+    final similarity = SimilarityService(
+      details: (source, id) async => {
+        'id': 1,
+        'source': source,
+        'externalId': id,
+        'title': 'Reference',
+        'kind': 'movie',
+        'genres': ['Drama'],
+      },
+      related: (source, id, page, recommendations, similar) async =>
+          CatalogSearchPage(
+            results: const [
+              {
+                'id': 2,
+                'source': 'tmdb_movie',
+                'externalId': '2',
+                'title': 'Related',
+                'kind': 'movie',
+                'genres': ['Drama'],
+              },
+            ],
+            page: page,
+            hasMore: false,
+            warnings: const [],
+            providers: const {},
+          ),
+      discover: (types, genres, page) async => CatalogSearchPage(
+        results: const [],
+        page: page,
+        hasMore: false,
+        warnings: const [],
+        providers: const {},
+      ),
+    );
+    final server = await startKadroskopServer(
+      address: InternetAddress.loopbackIPv4,
+      port: 0,
+      similarityService: similarity,
+    );
+    addTearDown(() => server.close(force: true));
+
+    final response = await http.get(
+      Uri.parse(
+        'http://127.0.0.1:${server.port}/v1/media/tmdb_movie/1/similar?mode=genres',
+      ),
+    );
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+
+    expect(response.statusCode, 200);
+    expect(body['mode'], 'genres');
+    expect((body['results'] as List).single['title'], 'Related');
+  });
 }
