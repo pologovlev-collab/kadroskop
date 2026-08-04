@@ -56,7 +56,11 @@ abstract interface class MediaRepository {
     bool refresh = false,
   });
   Future<Map<String, dynamic>> loadDiagnostics();
-  Future<void> setStatus(MediaItem item, WatchStatus status);
+  Future<void> setStatus(
+    MediaItem item,
+    WatchStatus status, {
+    bool resetProgress = false,
+  });
   Future<void> setFavorite(MediaItem item, bool favorite);
   Future<void> setRating(MediaItem item, double? rating);
   Future<Map<String, int>> loadActivityByMonth();
@@ -393,23 +397,73 @@ class LocalMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> setStatus(MediaItem item, WatchStatus status) async {
-    await _saveMedia(item);
-    final now = DateTime.now().toIso8601String();
-    await _local.database.rawInsert(
-      '''
-      INSERT INTO user_media (media_id, status, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(media_id) DO UPDATE SET
-        status = excluded.status,
-        updated_at = excluded.updated_at
-      ''',
-      [item.id, status.name, now],
-    );
-    await _local.database.insert('interactions', {
-      'media_id': item.id,
-      'event_type': 'status_${status.name}',
-      'created_at': now,
+  Future<void> setStatus(
+    MediaItem item,
+    WatchStatus status, {
+    bool resetProgress = false,
+  }) async {
+    final shouldReset = resetProgress || status == WatchStatus.none;
+    final totalEpisodes = _totalEpisodeCapacity(item);
+    if (item.isEpisodic && status == WatchStatus.watched && totalEpisodes < 1) {
+      throw StateError('Каталог не сообщил количество эпизодов.');
+    }
+    await _local.database.transaction((transaction) async {
+      await _saveMediaWith(transaction, item);
+      final now = DateTime.now().toIso8601String();
+      if (item.isEpisodic && status == WatchStatus.watched) {
+        await transaction.delete(
+          'episode_progress',
+          where: 'media_id = ?',
+          whereArgs: [item.id],
+        );
+        final batch = transaction.batch();
+        for (final coordinate in _episodeCoordinates(item)) {
+          batch.insert('episode_progress', {
+            'media_id': item.id,
+            'season_number': coordinate.$1,
+            'episode_number': coordinate.$2,
+            'watched': 1,
+            'watched_at': now,
+          });
+        }
+        await batch.commit(noResult: true);
+        await _reconcileItemProgress(
+          transaction,
+          item,
+          now: now,
+          forceStatus: WatchStatus.watched,
+        );
+      } else if (shouldReset) {
+        await transaction.delete(
+          'episode_progress',
+          where: 'media_id = ?',
+          whereArgs: [item.id],
+        );
+        await _reconcileItemProgress(
+          transaction,
+          item,
+          now: now,
+          forceStatus: status,
+        );
+      } else {
+        await transaction.rawInsert(
+          '''
+          INSERT INTO user_media (media_id, status, updated_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT(media_id) DO UPDATE SET
+            status = excluded.status,
+            updated_at = excluded.updated_at
+          ''',
+          [item.id, status.name, now],
+        );
+      }
+      await transaction.insert('interactions', {
+        'media_id': item.id,
+        'event_type': shouldReset
+            ? 'status_${status.name}_progress_reset'
+            : 'status_${status.name}',
+        'created_at': now,
+      });
     });
   }
 
@@ -1049,11 +1103,38 @@ class MemoryMediaRepository implements MediaRepository {
   Future<void> recordInteraction(MediaItem item, String eventType) async {}
 
   @override
-  Future<void> setStatus(MediaItem item, WatchStatus status) async {
+  Future<void> setStatus(
+    MediaItem item,
+    WatchStatus status, {
+    bool resetProgress = false,
+  }) async {
+    final total = _totalEpisodeCapacity(item);
+    if (item.isEpisodic && status == WatchStatus.watched && total < 1) {
+      throw StateError('Каталог не сообщил количество эпизодов.');
+    }
+    final shouldReset = resetProgress || status == WatchStatus.none;
+    if (item.isEpisodic && status == WatchStatus.watched) {
+      _episodeProgress[item.id] = [
+        for (final coordinate in _episodeCoordinates(item))
+          EpisodeProgress(
+            seasonNumber: coordinate.$1,
+            episodeNumber: coordinate.$2,
+            watched: true,
+          ),
+      ];
+    } else if (shouldReset) {
+      _episodeProgress[item.id] = [];
+    }
+    final watchedCount = _episodeProgress[item.id]?.length ?? 0;
     items = items
         .map(
-          (existing) =>
-              existing.id == item.id ? item.copyWith(status: status) : existing,
+          (existing) => existing.id == item.id
+              ? existing.copyWith(
+                  status: status,
+                  watchedEpisodeCount: watchedCount,
+                  watchedMinutes: watchedCount * item.episodeRuntimeMinutes,
+                )
+              : existing,
         )
         .toList();
   }

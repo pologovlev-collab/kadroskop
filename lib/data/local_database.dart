@@ -16,6 +16,10 @@ class LocalDatabase {
       _reconcileEpisodeProgress(database);
 
   @visibleForTesting
+  Future<void> migrateRecentSchemaForTesting({int oldVersion = 6}) =>
+      _upgradeRecentSchema(database, oldVersion);
+
+  @visibleForTesting
   static Future<LocalDatabase> openInMemoryForTesting() async {
     sqfliteFfiInit();
     final db = await databaseFactoryFfi.openDatabase(
@@ -42,7 +46,7 @@ class LocalDatabase {
     final db = await factory.openDatabase(
       p.join(directory, 'kadroskop.db'),
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 9,
         onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
         onCreate: (database, version) async {
           await _createSchema(database);
@@ -70,25 +74,7 @@ class LocalDatabase {
               'ALTER TABLE app_profile ADD COLUMN signed_in INTEGER NOT NULL DEFAULT 1',
             );
           }
-          if (oldVersion < 7) {
-            await database.execute(
-              'ALTER TABLE user_media ADD COLUMN favorite_updated_at TEXT',
-            );
-          }
-          if (oldVersion < 8) {
-            await database.execute(
-              'ALTER TABLE media ADD COLUMN backdrop_url TEXT',
-            );
-          }
-          if (oldVersion < 9) {
-            await database.execute(
-              'ALTER TABLE user_media ADD COLUMN watched_episode_count INTEGER NOT NULL DEFAULT 0',
-            );
-            await database.execute(
-              'ALTER TABLE user_media ADD COLUMN watched_minutes INTEGER NOT NULL DEFAULT 0',
-            );
-            await _reconcileEpisodeProgress(database);
-          }
+          await _upgradeRecentSchema(database, oldVersion);
         },
       ),
     );
@@ -172,6 +158,56 @@ class LocalDatabase {
           PRIMARY KEY(media_id, season_number, episode_number)
         )
       ''');
+
+  static Future<void> _addColumnIfMissing(
+    Database database, {
+    required String table,
+    required String column,
+    required String statement,
+  }) async {
+    final columns = await database.rawQuery('PRAGMA table_info($table)');
+    if (columns.any((row) => row['name'] == column)) return;
+    await database.execute(statement);
+  }
+
+  static Future<void> _upgradeRecentSchema(
+    Database database,
+    int oldVersion,
+  ) async {
+    if (oldVersion < 7) {
+      await _addColumnIfMissing(
+        database,
+        table: 'user_media',
+        column: 'favorite_updated_at',
+        statement: 'ALTER TABLE user_media ADD COLUMN favorite_updated_at TEXT',
+      );
+    }
+    if (oldVersion < 8) {
+      await _addColumnIfMissing(
+        database,
+        table: 'media',
+        column: 'backdrop_url',
+        statement: 'ALTER TABLE media ADD COLUMN backdrop_url TEXT',
+      );
+    }
+    if (oldVersion < 9) {
+      await _addColumnIfMissing(
+        database,
+        table: 'user_media',
+        column: 'watched_episode_count',
+        statement:
+            'ALTER TABLE user_media ADD COLUMN watched_episode_count INTEGER NOT NULL DEFAULT 0',
+      );
+      await _addColumnIfMissing(
+        database,
+        table: 'user_media',
+        column: 'watched_minutes',
+        statement:
+            'ALTER TABLE user_media ADD COLUMN watched_minutes INTEGER NOT NULL DEFAULT 0',
+      );
+      await _reconcileEpisodeProgress(database);
+    }
+  }
 
   static Future<void> _reconcileEpisodeProgress(Database database) async {
     await database.execute('''

@@ -141,10 +141,44 @@ class _KadroskopShellState extends State<KadroskopShell> {
     }
   }
 
-  Future<void> _setStatus(MediaItem item, WatchStatus status) async {
-    await widget.repository.setStatus(item, status);
+  Future<void> _setStatus(
+    MediaItem item,
+    WatchStatus status, {
+    bool resetProgress = false,
+  }) async {
+    await widget.repository.setStatus(
+      item,
+      status,
+      resetProgress: resetProgress,
+    );
     await _reload();
-    await _loadRecommendations(refresh: true);
+    unawaited(_loadRecommendations(refresh: true));
+  }
+
+  Future<void> _setStatusFromDetails(
+    BuildContext sheetContext,
+    MediaItem item,
+    WatchStatus status,
+  ) async {
+    var resetProgress = false;
+    if (status == WatchStatus.planned && item.watchedEpisodeCount > 0) {
+      final choice = await _showProgressChoice(sheetContext);
+      if (choice == null) return;
+      resetProgress = choice;
+    }
+    try {
+      await _setStatus(item, status, resetProgress: resetProgress);
+      if (sheetContext.mounted) Navigator.pop(sheetContext);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Статус изменён: ${status.label}')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось изменить статус: $error')),
+      );
+    }
   }
 
   Future<void> _setRating(MediaItem item, double? rating) async {
@@ -207,10 +241,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
       builder: (context) => _DetailsSheet(
         item: detailed,
         repository: widget.repository,
-        onStatus: (status) {
-          Navigator.pop(context);
-          _setStatus(detailed, status);
-        },
+        onStatus: (status) => _setStatusFromDetails(context, detailed, status),
         onEpisodesChanged: _reload,
         onRating: (rating) => _setRating(detailed, rating),
         onFavorite: (favorite) => _setFavorite(detailed, favorite),
@@ -287,6 +318,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
             items: _items,
             onOpen: _openDetails,
             onSetStatus: _setStatus,
+            onRating: _setRating,
             onFavorite: _setFavorite,
             onSimilar: _showSimilar,
           ),
@@ -2196,6 +2228,62 @@ class _EmptyState extends StatelessWidget {
   );
 }
 
+Future<bool?> _showProgressChoice(BuildContext context) => showDialog<bool>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: const Text('Что сделать с прогрессом?'),
+    content: const Text(
+      'У произведения уже есть просмотренные эпизоды. При переносе в планы их можно сохранить или сбросить.',
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Отмена'),
+      ),
+      OutlinedButton(
+        onPressed: () => Navigator.pop(context, false),
+        child: const Text('Сохранить прогресс'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, true),
+        child: const Text('Сбросить прогресс'),
+      ),
+    ],
+  ),
+);
+
+class _StatusChoiceButton extends StatelessWidget {
+  const _StatusChoiceButton({
+    required this.status,
+    required this.current,
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final WatchStatus status;
+  final WatchStatus current;
+  final IconData icon;
+  final String label;
+  final Future<void> Function(WatchStatus) onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = status == current;
+    return selected
+        ? FilledButton.icon(
+            onPressed: () => onPressed(status),
+            icon: const Icon(Icons.check_circle_rounded),
+            label: Text(label),
+          )
+        : OutlinedButton.icon(
+            onPressed: () => onPressed(status),
+            icon: Icon(icon),
+            label: Text(label),
+          );
+  }
+}
+
 class _DetailsSheet extends StatelessWidget {
   const _DetailsSheet({
     required this.item,
@@ -2208,7 +2296,7 @@ class _DetailsSheet extends StatelessWidget {
   });
   final MediaItem item;
   final MediaRepository repository;
-  final ValueChanged<WatchStatus> onStatus;
+  final Future<void> Function(WatchStatus) onStatus;
   final Future<void> Function() onEpisodesChanged;
   final Future<void> Function(double? rating) onRating;
   final Future<void> Function(bool favorite) onFavorite;
@@ -2357,45 +2445,35 @@ class _DetailsSheet extends StatelessWidget {
                         spacing: 10,
                         runSpacing: 10,
                         children: [
-                          FilledButton.icon(
-                            onPressed: item.isEpisodic
-                                ? () async {
-                                    await repository.setAllEpisodesWatched(
-                                      item,
-                                      true,
-                                    );
-                                    await onEpisodesChanged();
-                                  }
-                                : () => onStatus(WatchStatus.watched),
-                            icon: const Icon(Icons.check_rounded),
-                            label: Text(
-                              item.isEpisodic ? 'Смотрел всё' : 'Смотрел',
-                            ),
+                          _StatusChoiceButton(
+                            status: WatchStatus.watched,
+                            current: item.status,
+                            icon: Icons.check_rounded,
+                            label: item.isEpisodic ? 'Смотрел всё' : 'Смотрел',
+                            onPressed: onStatus,
                           ),
-                          OutlinedButton.icon(
-                            onPressed: () => onStatus(WatchStatus.planned),
-                            icon: const Icon(Icons.bookmark_add_outlined),
-                            label: const Text('В планы'),
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size(0, 48),
-                              side: const BorderSide(color: AppColors.border),
-                              foregroundColor: Theme.of(
-                                context,
-                              ).colorScheme.onSurface,
-                              backgroundColor: Theme.of(
-                                context,
-                              ).colorScheme.surface,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
+                          _StatusChoiceButton(
+                            status: WatchStatus.planned,
+                            current: item.status,
+                            icon: Icons.bookmark_add_outlined,
+                            label: 'В планы',
+                            onPressed: onStatus,
                           ),
                           if (item.isEpisodic)
-                            OutlinedButton.icon(
-                              onPressed: () => onStatus(WatchStatus.watching),
-                              icon: const Icon(Icons.playlist_play_rounded),
-                              label: const Text('Смотрю'),
+                            _StatusChoiceButton(
+                              status: WatchStatus.watching,
+                              current: item.status,
+                              icon: Icons.playlist_play_rounded,
+                              label: 'Смотрю',
+                              onPressed: onStatus,
                             ),
+                          _StatusChoiceButton(
+                            status: WatchStatus.dropped,
+                            current: item.status,
+                            icon: Icons.block_rounded,
+                            label: 'Брошено',
+                            onPressed: onStatus,
+                          ),
                           OutlinedButton.icon(
                             onPressed: () => _showRatingDialog(
                               context,

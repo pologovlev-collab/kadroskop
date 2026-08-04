@@ -6,6 +6,35 @@ import 'package:kadroskop/models/media_item.dart';
 import 'package:kadroskop/models/similar_media.dart';
 
 void main() {
+  test(
+    'recent migration is safe when version 6 already has new columns',
+    () async {
+      final database = await LocalDatabase.openInMemoryForTesting();
+      addTearDown(database.database.close);
+
+      await database.migrateRecentSchemaForTesting(oldVersion: 6);
+
+      final userColumns = await database.database.rawQuery(
+        'PRAGMA table_info(user_media)',
+      );
+      final mediaColumns = await database.database.rawQuery(
+        'PRAGMA table_info(media)',
+      );
+      expect(
+        userColumns.where((row) => row['name'] == 'watched_episode_count'),
+        hasLength(1),
+      );
+      expect(
+        userColumns.where((row) => row['name'] == 'favorite_updated_at'),
+        hasLength(1),
+      );
+      expect(
+        mediaColumns.where((row) => row['name'] == 'backdrop_url'),
+        hasLength(1),
+      );
+    },
+  );
+
   test('tracks individual episodes and whole series', () async {
     final repository = MemoryMediaRepository([series]);
 
@@ -218,6 +247,79 @@ void main() {
     final saved = (await repository.loadMedia()).single;
     expect(saved.watchedEpisodeCount, 0);
     expect(saved.status, WatchStatus.planned);
+  });
+
+  test('watched status fills every real episode atomically', () async {
+    final database = await LocalDatabase.openInMemoryForTesting();
+    addTearDown(database.database.close);
+    final repository = LocalMediaRepository(database);
+
+    await repository.setStatus(series, WatchStatus.watched);
+
+    final saved = (await repository.loadMedia()).single;
+    expect(saved.status, WatchStatus.watched);
+    expect(saved.watchedEpisodeCount, 4);
+    expect(saved.watchedMinutes, 180);
+    expect(await repository.loadEpisodeProgress(series.id), hasLength(4));
+  });
+
+  test('planned status can preserve or reset episodic progress', () async {
+    final repository = MemoryMediaRepository([series]);
+    await repository.setEpisodeRange(series, [1, 2, 3], true);
+    var saved = (await repository.loadMedia()).single;
+
+    await repository.setStatus(saved, WatchStatus.planned);
+    saved = (await repository.loadMedia()).single;
+    expect(saved.status, WatchStatus.planned);
+    expect(saved.watchedEpisodeCount, 3);
+
+    await repository.setStatus(saved, WatchStatus.planned, resetProgress: true);
+    saved = (await repository.loadMedia()).single;
+    expect(saved.status, WatchStatus.planned);
+    expect(saved.watchedEpisodeCount, 0);
+    expect(await repository.loadEpisodeProgress(series.id), isEmpty);
+  });
+
+  test('removing from collection clears progress but keeps favorite', () async {
+    final database = await LocalDatabase.openInMemoryForTesting();
+    addTearDown(database.database.close);
+    final repository = LocalMediaRepository(database);
+    await repository.setFavorite(series, true);
+    await repository.setEpisodeRange(series, [1, 2], true);
+    var saved = (await repository.loadMedia()).single;
+
+    await repository.setStatus(saved, WatchStatus.none);
+
+    saved = (await repository.loadMedia()).single;
+    expect(saved.status, WatchStatus.none);
+    expect(saved.isFavorite, isTrue);
+    expect(saved.watchedEpisodeCount, 0);
+    expect(await repository.loadEpisodeProgress(series.id), isEmpty);
+  });
+
+  test('watched status transaction rolls back on summary failure', () async {
+    final database = await LocalDatabase.openInMemoryForTesting();
+    addTearDown(database.database.close);
+    final repository = LocalMediaRepository(database);
+    await repository.setStatus(series, WatchStatus.planned);
+    await database.database.execute('''
+      CREATE TRIGGER reject_watched_status
+      BEFORE UPDATE OF watched_episode_count ON user_media
+      WHEN NEW.watched_episode_count > 0
+      BEGIN
+        SELECT RAISE(ABORT, 'test rollback');
+      END
+    ''');
+
+    await expectLater(
+      repository.setStatus(series, WatchStatus.watched),
+      throwsA(anything),
+    );
+
+    final saved = (await repository.loadMedia()).single;
+    expect(saved.status, WatchStatus.planned);
+    expect(saved.watchedEpisodeCount, 0);
+    expect(await repository.loadEpisodeProgress(series.id), isEmpty);
   });
 }
 

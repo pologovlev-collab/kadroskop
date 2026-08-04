@@ -7,18 +7,42 @@ import '../widgets/poster_card.dart';
 
 enum LibrarySort { recent, title, yearNewest, rating }
 
+enum LibraryTab { all, favorite, planned, watching, watched, dropped }
+
+extension on LibraryTab {
+  String get label => switch (this) {
+    LibraryTab.all => 'Все',
+    LibraryTab.favorite => 'Избранное',
+    LibraryTab.planned => 'В планах',
+    LibraryTab.watching => 'Смотрю',
+    LibraryTab.watched => 'Просмотрено',
+    LibraryTab.dropped => 'Брошено',
+  };
+
+  WatchStatus? get status => switch (this) {
+    LibraryTab.planned => WatchStatus.planned,
+    LibraryTab.watching => WatchStatus.watching,
+    LibraryTab.watched => WatchStatus.watched,
+    LibraryTab.dropped => WatchStatus.dropped,
+    LibraryTab.all || LibraryTab.favorite => null,
+  };
+}
+
 class LibraryPage extends StatefulWidget {
   const LibraryPage({
     super.key,
     required this.items,
     required this.onOpen,
     required this.onSetStatus,
+    required this.onRating,
     required this.onFavorite,
     required this.onSimilar,
   });
   final List<MediaItem> items;
   final ValueChanged<MediaItem> onOpen;
-  final Future<void> Function(MediaItem, WatchStatus) onSetStatus;
+  final Future<void> Function(MediaItem, WatchStatus, {bool resetProgress})
+  onSetStatus;
+  final Future<void> Function(MediaItem, double?) onRating;
   final void Function(MediaItem item, bool favorite) onFavorite;
   final ValueChanged<MediaItem> onSimilar;
 
@@ -28,8 +52,9 @@ class LibraryPage extends StatefulWidget {
 
 class _LibraryPageState extends State<LibraryPage> {
   final _search = TextEditingController();
-  WatchStatus? _status;
+  LibraryTab _tab = LibraryTab.all;
   MediaKind? _kind;
+  String? _genre;
   LibrarySort _sort = LibrarySort.recent;
 
   @override
@@ -41,10 +66,23 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   Widget build(BuildContext context) {
     final query = _search.text.trim().toLowerCase();
+    final libraryItems = widget.items
+        .where((item) => item.status != WatchStatus.none)
+        .toList();
+    final filterableItems = widget.items
+        .where((item) => item.status != WatchStatus.none || item.isFavorite)
+        .toList();
+    final genres =
+        filterableItems.expand((item) => item.genres).toSet().toList()..sort();
     final values = widget.items.where((item) {
-      return item.status != WatchStatus.none &&
-          (_status == null || item.status == _status) &&
+      final belongsToTab = switch (_tab) {
+        LibraryTab.all => item.status != WatchStatus.none,
+        LibraryTab.favorite => item.isFavorite,
+        _ => item.status == _tab.status,
+      };
+      return belongsToTab &&
           (_kind == null || item.kind == _kind) &&
+          (_genre == null || item.genres.contains(_genre)) &&
           (query.isEmpty ||
               item.title.toLowerCase().contains(query) ||
               item.subtitle.toLowerCase().contains(query) ||
@@ -60,12 +98,12 @@ class _LibraryPageState extends State<LibraryPage> {
         values.sort((a, b) => b.year.compareTo(a.year));
         break;
       case LibrarySort.rating:
-        values.sort((a, b) => b.rating.compareTo(a.rating));
+        values.sort((a, b) {
+          final personal = (b.userRating ?? -1).compareTo(a.userRating ?? -1);
+          return personal != 0 ? personal : b.rating.compareTo(a.rating);
+        });
         break;
     }
-    final allSaved = widget.items
-        .where((item) => item.status != WatchStatus.none)
-        .toList();
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
         MediaQuery.sizeOf(context).width < 600 ? 18 : 34,
@@ -93,20 +131,25 @@ class _LibraryPageState extends State<LibraryPage> {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  _Summary(value: '${allSaved.length}', label: 'всего'),
+                  _Summary(value: '${libraryItems.length}', label: 'всего'),
                   _Summary(
                     value:
-                        '${allSaved.where((item) => item.status == WatchStatus.watching).length}',
+                        '${filterableItems.where((item) => item.isFavorite).length}',
+                    label: 'избранное',
+                  ),
+                  _Summary(
+                    value:
+                        '${libraryItems.where((item) => item.status == WatchStatus.watching).length}',
                     label: 'смотрю',
                   ),
                   _Summary(
                     value:
-                        '${allSaved.where((item) => item.status == WatchStatus.watched).length}',
+                        '${libraryItems.where((item) => item.status == WatchStatus.watched).length}',
                     label: 'просмотрено',
                   ),
                   _Summary(
                     value:
-                        '${allSaved.where((item) => item.status == WatchStatus.planned).length}',
+                        '${libraryItems.where((item) => item.status == WatchStatus.planned).length}',
                     label: 'в планах',
                   ),
                 ],
@@ -114,17 +157,20 @@ class _LibraryPageState extends State<LibraryPage> {
               const SizedBox(height: 20),
               _Filters(
                 search: _search,
-                status: _status,
+                tab: _tab,
                 kind: _kind,
+                genre: _genre,
+                genres: genres,
                 sort: _sort,
                 onChanged: () => setState(() {}),
-                onStatus: (value) => setState(() => _status = value),
+                onTab: (value) => setState(() => _tab = value),
                 onKind: (value) => setState(() => _kind = value),
+                onGenre: (value) => setState(() => _genre = value),
                 onSort: (value) => setState(() => _sort = value),
               ),
               const SizedBox(height: 24),
               if (values.isEmpty)
-                _Empty(filtered: allSaved.isNotEmpty)
+                _Empty(filtered: filterableItems.isNotEmpty)
               else
                 AdaptiveMediaGrid(
                   items: values,
@@ -143,10 +189,14 @@ class _LibraryPageState extends State<LibraryPage> {
                         ),
                         Positioned(
                           top: 8,
-                          right: 8,
+                          left: 8,
                           child: _StatusMenu(
                             item: item,
                             onSetStatus: widget.onSetStatus,
+                            onOpen: widget.onOpen,
+                            onRating: widget.onRating,
+                            onFavorite: widget.onFavorite,
+                            onSimilar: widget.onSimilar,
                           ),
                         ),
                       ],
@@ -164,21 +214,27 @@ class _LibraryPageState extends State<LibraryPage> {
 class _Filters extends StatelessWidget {
   const _Filters({
     required this.search,
-    required this.status,
+    required this.tab,
     required this.kind,
+    required this.genre,
+    required this.genres,
     required this.sort,
     required this.onChanged,
-    required this.onStatus,
+    required this.onTab,
     required this.onKind,
+    required this.onGenre,
     required this.onSort,
   });
   final TextEditingController search;
-  final WatchStatus? status;
+  final LibraryTab tab;
   final MediaKind? kind;
+  final String? genre;
+  final List<String> genres;
   final LibrarySort sort;
   final VoidCallback onChanged;
-  final ValueChanged<WatchStatus?> onStatus;
+  final ValueChanged<LibraryTab> onTab;
   final ValueChanged<MediaKind?> onKind;
+  final ValueChanged<String?> onGenre;
   final ValueChanged<LibrarySort> onSort;
   @override
   Widget build(BuildContext context) => Container(
@@ -195,19 +251,19 @@ class _Filters extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              ChoiceChip(
-                label: const Text('Все'),
-                selected: status == null,
-                onSelected: (_) => onStatus(null),
-              ),
-              for (final value in WatchStatus.values.where(
-                (value) => value != WatchStatus.none,
-              )) ...[
-                const SizedBox(width: 8),
+              for (
+                var index = 0;
+                index < LibraryTab.values.length;
+                index++
+              ) ...[
+                if (index > 0) const SizedBox(width: 8),
                 ChoiceChip(
-                  label: Text(value.label),
-                  selected: status == value,
-                  onSelected: (_) => onStatus(value),
+                  avatar: LibraryTab.values[index] == LibraryTab.favorite
+                      ? const Icon(Icons.favorite_rounded, size: 16)
+                      : null,
+                  label: Text(LibraryTab.values[index].label),
+                  selected: tab == LibraryTab.values[index],
+                  onSelected: (_) => onTab(LibraryTab.values[index]),
                 ),
               ],
             ],
@@ -216,7 +272,7 @@ class _Filters extends StatelessWidget {
         const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
-            final compact = constraints.maxWidth < 760;
+            final compact = constraints.maxWidth < 1050;
             final fields = [
               TextField(
                 controller: search,
@@ -228,6 +284,7 @@ class _Filters extends StatelessWidget {
               ),
               DropdownButtonFormField<MediaKind?>(
                 initialValue: kind,
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Тип'),
                 items: [
                   const DropdownMenuItem(value: null, child: Text('Все типы')),
@@ -238,6 +295,7 @@ class _Filters extends StatelessWidget {
               ),
               DropdownButtonFormField<LibrarySort>(
                 initialValue: sort,
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Сортировка'),
                 items: const [
                   DropdownMenuItem(
@@ -254,12 +312,26 @@ class _Filters extends StatelessWidget {
                   ),
                   DropdownMenuItem(
                     value: LibrarySort.rating,
-                    child: Text('По рейтингу'),
+                    child: Text('По моей оценке'),
                   ),
                 ],
                 onChanged: (value) {
                   if (value != null) onSort(value);
                 },
+              ),
+              DropdownButtonFormField<String?>(
+                initialValue: genre,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Жанр'),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('Все жанры')),
+                  for (final value in genres)
+                    DropdownMenuItem(
+                      value: value,
+                      child: Text(value, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: onGenre,
               ),
             ];
             if (compact) {
@@ -278,6 +350,8 @@ class _Filters extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(child: fields[1]),
                 const SizedBox(width: 10),
+                Expanded(child: fields[3]),
+                const SizedBox(width: 10),
                 Expanded(child: fields[2]),
               ],
             );
@@ -288,32 +362,267 @@ class _Filters extends StatelessWidget {
   );
 }
 
+enum _LibraryAction {
+  open,
+  similar,
+  favorite,
+  rate,
+  planned,
+  watching,
+  watched,
+  dropped,
+  remove,
+}
+
 class _StatusMenu extends StatelessWidget {
-  const _StatusMenu({required this.item, required this.onSetStatus});
+  const _StatusMenu({
+    required this.item,
+    required this.onSetStatus,
+    required this.onOpen,
+    required this.onRating,
+    required this.onFavorite,
+    required this.onSimilar,
+  });
   final MediaItem item;
-  final Future<void> Function(MediaItem, WatchStatus) onSetStatus;
+  final Future<void> Function(MediaItem, WatchStatus, {bool resetProgress})
+  onSetStatus;
+  final ValueChanged<MediaItem> onOpen;
+  final Future<void> Function(MediaItem, double?) onRating;
+  final void Function(MediaItem, bool) onFavorite;
+  final ValueChanged<MediaItem> onSimilar;
+
+  Future<void> _handle(BuildContext context, _LibraryAction action) async {
+    switch (action) {
+      case _LibraryAction.open:
+        onOpen(item);
+        return;
+      case _LibraryAction.similar:
+        onSimilar(item);
+        return;
+      case _LibraryAction.favorite:
+        onFavorite(item, !item.isFavorite);
+        return;
+      case _LibraryAction.rate:
+        final rating = await _showLibraryRatingDialog(context, item.userRating);
+        if (rating == null) return;
+        await onRating(item, rating == 0 ? null : rating);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(rating == 0 ? 'Оценка снята' : 'Оценка сохранена'),
+            ),
+          );
+        }
+        return;
+      case _LibraryAction.remove:
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Удалить из коллекции?'),
+            content: Text(
+              '«${item.title}» исчезнет из статусов, а прогресс эпизодов будет очищен. Избранное останется отдельной отметкой.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Удалить'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+        if (!context.mounted) return;
+        await _saveStatus(context, WatchStatus.none, resetProgress: true);
+        return;
+      case _LibraryAction.planned:
+        var resetProgress = false;
+        if (item.watchedEpisodeCount > 0) {
+          final choice = await _showLibraryProgressChoice(context);
+          if (choice == null) return;
+          resetProgress = choice;
+        }
+        if (!context.mounted) return;
+        await _saveStatus(
+          context,
+          WatchStatus.planned,
+          resetProgress: resetProgress,
+        );
+        return;
+      case _LibraryAction.watching:
+        await _saveStatus(context, WatchStatus.watching);
+        return;
+      case _LibraryAction.watched:
+        await _saveStatus(context, WatchStatus.watched);
+        return;
+      case _LibraryAction.dropped:
+        await _saveStatus(context, WatchStatus.dropped);
+        return;
+    }
+  }
+
+  Future<void> _saveStatus(
+    BuildContext context,
+    WatchStatus status, {
+    bool resetProgress = false,
+  }) async {
+    try {
+      await onSetStatus(item, status, resetProgress: resetProgress);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            status == WatchStatus.none
+                ? 'Удалено из коллекции'
+                : 'Статус изменён: ${status.label}',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Не удалось сохранить: $error')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Material(
     color: Theme.of(context).colorScheme.surface.withValues(alpha: .94),
     borderRadius: BorderRadius.circular(30),
-    child: PopupMenuButton<WatchStatus>(
-      tooltip: 'Изменить статус',
+    child: PopupMenuButton<_LibraryAction>(
+      tooltip: 'Действия с произведением',
       icon: const Icon(Icons.more_horiz_rounded, size: 20),
-      onSelected: (status) => onSetStatus(item, status),
+      onSelected: (action) => _handle(context, action),
       itemBuilder: (context) => [
-        for (final status in WatchStatus.values.where(
-          (status) => status != WatchStatus.none,
-        ))
-          PopupMenuItem(value: status, child: Text(status.label)),
+        const PopupMenuItem(
+          value: _LibraryAction.open,
+          child: ListTile(
+            leading: Icon(Icons.open_in_new_rounded),
+            title: Text('Открыть карточку'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _LibraryAction.similar,
+          child: ListTile(
+            leading: Icon(Icons.hub_outlined),
+            title: Text('Найти похожее'),
+          ),
+        ),
+        PopupMenuItem(
+          value: _LibraryAction.favorite,
+          child: ListTile(
+            leading: Icon(
+              item.isFavorite
+                  ? Icons.favorite_rounded
+                  : Icons.favorite_border_rounded,
+            ),
+            title: Text(
+              item.isFavorite ? 'Убрать из избранного' : 'В избранное',
+            ),
+          ),
+        ),
+        PopupMenuItem(
+          value: _LibraryAction.rate,
+          child: ListTile(
+            leading: const Icon(Icons.star_outline_rounded),
+            title: Text(
+              item.userRating == null
+                  ? 'Поставить оценку'
+                  : 'Моя оценка: ${item.userRating!.toStringAsFixed(0)}',
+            ),
+          ),
+        ),
+        const PopupMenuDivider(),
+        for (final entry in const [
+          (_LibraryAction.planned, WatchStatus.planned),
+          (_LibraryAction.watching, WatchStatus.watching),
+          (_LibraryAction.watched, WatchStatus.watched),
+          (_LibraryAction.dropped, WatchStatus.dropped),
+        ])
+          PopupMenuItem(
+            value: entry.$1,
+            child: ListTile(
+              leading: Icon(
+                item.status == entry.$2
+                    ? Icons.check_circle_rounded
+                    : Icons.circle_outlined,
+                color: item.status == entry.$2 ? AppColors.accent : null,
+              ),
+              title: Text(entry.$2.label),
+            ),
+          ),
         const PopupMenuDivider(),
         const PopupMenuItem(
-          value: WatchStatus.none,
-          child: Text('Удалить из коллекции'),
+          value: _LibraryAction.remove,
+          child: ListTile(
+            leading: Icon(Icons.delete_outline_rounded),
+            title: Text('Удалить из коллекции'),
+          ),
         ),
       ],
     ),
   );
 }
+
+Future<bool?> _showLibraryProgressChoice(BuildContext context) =>
+    showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Перенести в планы'),
+        content: const Text('Сохранить уже отмеченные эпизоды?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Отмена'),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Сохранить'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Сбросить'),
+          ),
+        ],
+      ),
+    );
+
+Future<double?> _showLibraryRatingDialog(
+  BuildContext context,
+  double? current,
+) => showDialog<double>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: const Text('Моя оценка'),
+    content: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (var rating = 1; rating <= 10; rating++)
+          ChoiceChip(
+            label: Text('$rating'),
+            selected: current?.round() == rating,
+            onSelected: (_) => Navigator.pop(context, rating.toDouble()),
+          ),
+      ],
+    ),
+    actions: [
+      if (current != null)
+        TextButton(
+          onPressed: () => Navigator.pop(context, 0),
+          child: const Text('Снять оценку'),
+        ),
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Отмена'),
+      ),
+    ],
+  ),
+);
 
 class _Summary extends StatelessWidget {
   const _Summary({required this.value, required this.label});
