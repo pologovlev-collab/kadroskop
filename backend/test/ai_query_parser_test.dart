@@ -142,6 +142,64 @@ void main() {
       expect(intent.plotKeywords, contains('mechanical creatures'));
       expect(controller.status, AiProviderStatus.error);
     });
+
+    test('regional API error uses fallback and does not retry Gemini', () async {
+      var calls = 0;
+      final controller = _geminiController(
+        MockClient((httpRequest) async {
+          calls += 1;
+          return http.Response(
+            jsonEncode({
+              'error': {
+                'status': 'FAILED_PRECONDITION',
+                'message':
+                    'This API is not available in your current location.',
+              },
+            }),
+            400,
+          );
+        }),
+      );
+
+      final first = await controller.parse(request);
+      final second = await controller.parse(request);
+
+      expect(first.plotKeywords, contains('portals'));
+      expect(second.plotKeywords, contains('portals'));
+      expect(calls, 1);
+      expect(controller.providerCalls, 1);
+      expect(controller.status, AiProviderStatus.unavailable);
+      expect(
+        controller.message,
+        'Gemini недоступен в текущем регионе. Используется другой способ анализа.',
+      );
+    });
+
+    test(
+      'regional diagnosis is retained after the initial Gemini failure',
+      () async {
+        final controller = _geminiController(
+          MockClient(
+            (httpRequest) async => http.Response(
+              jsonEncode({
+                'error': {
+                  'message': 'User location is not supported for the API use.',
+                },
+              }),
+              400,
+            ),
+          ),
+        );
+
+        await controller.parse(request);
+
+        expect(controller.status, AiProviderStatus.unavailable);
+        expect(
+          controller.message,
+          'Gemini недоступен в текущем регионе. Используется другой способ анализа.',
+        );
+      },
+    );
   });
 
   group('DeepSeekQueryParser', () {

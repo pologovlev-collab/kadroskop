@@ -193,6 +193,7 @@ class AiParserController implements AiQueryParser {
     String? Function()? actualModel,
     DateTime Function()? clock,
     this.rateLimitCooldown = const Duration(minutes: 5),
+    this.regionUnavailableCooldown = const Duration(hours: 24),
   }) : _primary = primary,
        _fallback = fallback,
        _usageQuota = usageQuota,
@@ -208,10 +209,12 @@ class AiParserController implements AiQueryParser {
   final String? Function()? _actualModel;
   final DateTime Function() _clock;
   final Duration rateLimitCooldown;
+  final Duration regionUnavailableCooldown;
   AiProviderStatus status;
   String? message;
   int providerCalls = 0;
   DateTime? _cooldownUntil;
+  String? _cooldownMessage;
   String? _usedModel;
 
   bool get usesNetworkProvider =>
@@ -231,7 +234,9 @@ class AiParserController implements AiQueryParser {
     final cooldownUntil = _cooldownUntil;
     if (cooldownUntil != null && _clock().isBefore(cooldownUntil)) {
       status = AiProviderStatus.unavailable;
-      message = 'AI-провайдер временно недоступен. Использован обычный поиск.';
+      message =
+          _cooldownMessage ??
+          'AI-провайдер временно недоступен. Использован обычный поиск.';
       return _fallback.parse(request);
     }
     final usageQuota = _usageQuota;
@@ -257,12 +262,18 @@ class AiParserController implements AiQueryParser {
       if (acquiredQuota) await usageQuota!.recordFailure();
       if (error.kind == AiProviderErrorKind.rateLimited) {
         _cooldownUntil = _clock().add(rateLimitCooldown);
+        _cooldownMessage =
+            'AI-провайдер временно недоступен. Использован обычный поиск.';
+      } else if (error.kind == AiProviderErrorKind.regionUnavailable) {
+        _cooldownUntil = _clock().add(regionUnavailableCooldown);
+        _cooldownMessage = error.message;
       }
       status = switch (error.kind) {
         AiProviderErrorKind.missingKey => AiProviderStatus.noKey,
         AiProviderErrorKind.noFunds ||
         AiProviderErrorKind.quotaExceeded => AiProviderStatus.noFunds,
         AiProviderErrorKind.rateLimited => AiProviderStatus.unavailable,
+        AiProviderErrorKind.regionUnavailable => AiProviderStatus.unavailable,
         _ => AiProviderStatus.error,
       };
       message = error.message;
