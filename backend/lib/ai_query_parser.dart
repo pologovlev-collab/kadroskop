@@ -18,6 +18,10 @@ class AiSettings {
     required this.maxOutputTokens,
     required this.cacheHours,
     required this.rerankEnabled,
+    required this.secondaryProvider,
+    required this.geminiApiKey,
+    required this.geminiModel,
+    required this.geminiThinkingLevel,
     required this.deepSeekApiKey,
     required this.deepSeekBaseUrl,
     required this.deepSeekModel,
@@ -33,6 +37,10 @@ class AiSettings {
   final int maxOutputTokens;
   final int cacheHours;
   final bool rerankEnabled;
+  final String secondaryProvider;
+  final String? geminiApiKey;
+  final String geminiModel;
+  final String geminiThinkingLevel;
   final String? deepSeekApiKey;
   final String deepSeekBaseUrl;
   final String deepSeekModel;
@@ -42,24 +50,24 @@ class AiSettings {
 
   factory AiSettings.fromEnvironment(Map<String, String> values) => AiSettings(
     enabled: _bool(values['AI_ENABLED'], fallback: true),
-    provider: (values['AI_PROVIDER'] ?? 'deepseek').trim().toLowerCase(),
+    provider: (values['AI_PROVIDER'] ?? 'gemini').trim().toLowerCase(),
     timeout: Duration(
       seconds: _boundedInt(
         values['AI_TIMEOUT_SECONDS'],
-        fallback: 12,
+        fallback: 15,
         min: 2,
         max: 60,
       ),
     ),
     maxInputLength: _boundedInt(
       values['AI_MAX_INPUT_LENGTH'],
-      fallback: 1000,
+      fallback: 1500,
       min: 100,
       max: 5000,
     ),
     maxOutputTokens: _boundedInt(
       values['AI_MAX_OUTPUT_TOKENS'],
-      fallback: 400,
+      fallback: 500,
       min: 100,
       max: 800,
     ),
@@ -70,6 +78,12 @@ class AiSettings {
       max: 720,
     ),
     rerankEnabled: _bool(values['AI_RERANK_ENABLED'], fallback: false),
+    secondaryProvider: (values['AI_SECONDARY_PROVIDER'] ?? 'none')
+        .trim()
+        .toLowerCase(),
+    geminiApiKey: _secret(values['GEMINI_API_KEY']),
+    geminiModel: _secret(values['GEMINI_MODEL']) ?? 'gemini-3.5-flash-lite',
+    geminiThinkingLevel: _secret(values['GEMINI_THINKING_LEVEL']) ?? 'minimal',
     deepSeekApiKey: _secret(values['DEEPSEEK_API_KEY']),
     deepSeekBaseUrl:
         _secret(values['DEEPSEEK_BASE_URL']) ?? 'https://api.deepseek.com',
@@ -102,7 +116,7 @@ class AiParserController implements AiQueryParser {
   int providerCalls = 0;
 
   bool get usesNetworkProvider =>
-      provider == 'deepseek' || provider == 'yandex';
+      provider == 'gemini' || provider == 'deepseek' || provider == 'yandex';
 
   @override
   Future<RememberSearchIntent> parse(RememberSearchRequest request) async {
@@ -121,7 +135,8 @@ class AiParserController implements AiQueryParser {
     } on AiProviderException catch (error) {
       status = switch (error.kind) {
         AiProviderErrorKind.missingKey => AiProviderStatus.noKey,
-        AiProviderErrorKind.noFunds => AiProviderStatus.noFunds,
+        AiProviderErrorKind.noFunds ||
+        AiProviderErrorKind.quotaExceeded => AiProviderStatus.noFunds,
         _ => AiProviderStatus.error,
       };
       message = error.message;
@@ -147,6 +162,7 @@ class AiParserController implements AiQueryParser {
 
   Map<String, Object?> toJson() => {
     'provider': switch (provider) {
+      'gemini' => 'Gemini',
       'deepseek' => 'DeepSeek',
       'yandex' => 'YandexGPT',
       _ => 'none',
@@ -172,6 +188,27 @@ AiParserController createAiQueryParser(
     );
   }
   final httpClient = client ?? http.Client();
+  if (settings.provider == 'gemini') {
+    final key = settings.geminiApiKey;
+    return AiParserController(
+      provider: 'gemini',
+      model: settings.geminiModel,
+      primary: key == null
+          ? const MissingKeyQueryParser('Gemini')
+          : GeminiQueryParser(
+              client: httpClient,
+              apiKey: key,
+              model: settings.geminiModel,
+              thinkingLevel: settings.geminiThinkingLevel,
+              timeout: settings.timeout,
+              maxTokens: settings.maxOutputTokens,
+            ),
+      fallback: fallback,
+      initialStatus: key == null
+          ? AiProviderStatus.noKey
+          : AiProviderStatus.fallback,
+    );
+  }
   if (settings.provider == 'deepseek') {
     final key = settings.deepSeekApiKey;
     return AiParserController(
@@ -222,6 +259,93 @@ AiParserController createAiQueryParser(
     fallback: fallback,
     initialStatus: AiProviderStatus.disabled,
   );
+}
+
+class GeminiQueryParser implements AiQueryParser {
+  GeminiQueryParser({
+    required this.client,
+    required this.apiKey,
+    required this.model,
+    required this.thinkingLevel,
+    required this.timeout,
+    required this.maxTokens,
+    this.delay,
+  });
+
+  final http.Client client;
+  final String apiKey;
+  final String model;
+  final String thinkingLevel;
+  final Duration timeout;
+  final int maxTokens;
+  final Future<void> Function(Duration duration)? delay;
+
+  @override
+  Future<RememberSearchIntent> parse(RememberSearchRequest request) async {
+    final uri = Uri.https(
+      'generativelanguage.googleapis.com',
+      '/v1beta/models/$model:generateContent',
+    );
+    final body = jsonEncode({
+      'systemInstruction': {
+        'parts': [
+          {'text': _systemPrompt},
+        ],
+      },
+      'contents': [
+        {
+          'role': 'user',
+          'parts': [
+            {'text': request.query},
+          ],
+        },
+      ],
+      'generationConfig': {
+        'thinkingLevel': thinkingLevel,
+        'maxOutputTokens': maxTokens.clamp(100, 500),
+        'responseFormat': {
+          'text': {
+            'mimeType': 'application/json',
+            'schema': _rememberIntentJsonSchema,
+          },
+        },
+      },
+    });
+
+    var response = await _post(uri, body);
+    if (response.statusCode == 429) {
+      await (delay ?? Future<void>.delayed)(_retryAfter(response));
+      response = await _post(uri, body);
+    }
+    _validateStatus(response, 'Gemini');
+    final decoded = _decodeResponse(response.body, 'Gemini');
+    final candidates = decoded['candidates'];
+    final first = candidates is List && candidates.isNotEmpty
+        ? candidates.first
+        : null;
+    final content = first is Map ? first['content'] : null;
+    final parts = content is Map ? content['parts'] : null;
+    final text = parts is List
+        ? parts
+              .whereType<Map>()
+              .map((part) => part['text'])
+              .whereType<String>()
+              .join()
+        : null;
+    return _intentFromContent(text, 'Gemini');
+  }
+
+  Future<http.Response> _post(Uri uri, String body) => client
+      .post(
+        uri,
+        headers: {
+          'x-goog-api-key': apiKey,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: body,
+      )
+      .timeout(timeout);
 }
 
 class DeepSeekQueryParser implements AiQueryParser {
@@ -410,6 +534,9 @@ enum AiProviderErrorKind {
   unauthorized,
   rateLimited,
   noFunds,
+  quotaExceeded,
+  regionUnavailable,
+  modelUnavailable,
   timeout,
   invalidResponse,
   unavailable,
@@ -458,10 +585,21 @@ Map<String, dynamic> _decodeResponse(String value, String provider) {
 
 void _validateStatus(http.Response response, String provider) {
   if (response.statusCode >= 200 && response.statusCode < 300) return;
+  final errorBody = response.body.toLowerCase();
   final kind = switch (response.statusCode) {
     401 || 403 => AiProviderErrorKind.unauthorized,
     402 => AiProviderErrorKind.noFunds,
+    404 => AiProviderErrorKind.modelUnavailable,
+    429
+        when errorBody.contains('quota') ||
+            errorBody.contains('resource_exhausted') =>
+      AiProviderErrorKind.quotaExceeded,
     429 => AiProviderErrorKind.rateLimited,
+    400
+        when errorBody.contains('region') ||
+            errorBody.contains('location') ||
+            errorBody.contains('country') =>
+      AiProviderErrorKind.regionUnavailable,
     _ => AiProviderErrorKind.unavailable,
   };
   throw AiProviderException(kind, switch (kind) {
@@ -470,6 +608,11 @@ void _validateStatus(http.Response response, String provider) {
     AiProviderErrorKind.rateLimited => '$provider ограничил частоту запросов.',
     _ => '$provider временно недоступен (${response.statusCode}).',
   });
+}
+
+Duration _retryAfter(http.Response response) {
+  final seconds = int.tryParse(response.headers['retry-after'] ?? '') ?? 1;
+  return Duration(seconds: seconds.clamp(0, 30));
 }
 
 void _addByPattern(
@@ -568,6 +711,94 @@ const _plotPatterns = {
   'животн': 'animals',
   'остров': 'island',
   'пустын': 'desert',
+};
+
+const Map<String, Object?> _rememberIntentJsonSchema = {
+  'type': 'object',
+  'additionalProperties': false,
+  'properties': {
+    'workTypes': {
+      'type': 'array',
+      'items': {
+        'type': 'string',
+        'enum': [
+          'movie',
+          'series',
+          'anime',
+          'cartoon',
+          'animated_series',
+          'documentary',
+        ],
+      },
+      'maxItems': 6,
+    },
+    'yearFrom': {
+      'anyOf': [
+        {'type': 'integer'},
+        {'type': 'null'},
+      ],
+    },
+    'yearTo': {
+      'anyOf': [
+        {'type': 'integer'},
+        {'type': 'null'},
+      ],
+    },
+    'genres': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 8,
+    },
+    'plotKeywords': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 16,
+    },
+    'originalLanguageHints': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 5,
+    },
+    'countries': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 5,
+    },
+    'visualStyle': {
+      'anyOf': [
+        {
+          'type': 'string',
+          'enum': ['2d', '3d', 'puppet', 'unknown'],
+        },
+        {'type': 'null'},
+      ],
+    },
+    'targetAudience': {
+      'anyOf': [
+        {'type': 'string'},
+        {'type': 'null'},
+      ],
+    },
+    'negativeKeywords': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 10,
+    },
+    'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
+  },
+  'required': [
+    'workTypes',
+    'yearFrom',
+    'yearTo',
+    'genres',
+    'plotKeywords',
+    'originalLanguageHints',
+    'countries',
+    'visualStyle',
+    'targetAudience',
+    'negativeKeywords',
+    'confidence',
+  ],
 };
 
 const _systemPrompt = '''

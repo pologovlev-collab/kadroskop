@@ -12,6 +12,138 @@ void main() {
         'Мультсериал примерно из 2000-х. Подростки попадали через порталы в другой мир, там были механические существа.',
   );
 
+  group('GeminiQueryParser', () {
+    test('uses structured JSON with minimal thinking', () async {
+      Map<String, dynamic>? sent;
+      final parser = GeminiQueryParser(
+        client: MockClient((httpRequest) async {
+          sent = jsonDecode(httpRequest.body) as Map<String, dynamic>;
+          expect(httpRequest.headers['x-goog-api-key'], 'test-key');
+          return _geminiResponse(_validIntent);
+        }),
+        apiKey: 'test-key',
+        model: 'gemini-3.5-flash-lite',
+        thinkingLevel: 'minimal',
+        timeout: const Duration(seconds: 1),
+        maxTokens: 500,
+      );
+
+      final intent = await parser.parse(request);
+
+      expect(intent.plotKeywords, contains('portals'));
+      final generation = sent!['generationConfig'] as Map<String, dynamic>;
+      expect(generation['thinkingLevel'], 'minimal');
+      expect(generation['maxOutputTokens'], 500);
+      final format = generation['responseFormat'] as Map<String, dynamic>;
+      final text = format['text'] as Map<String, dynamic>;
+      expect(text['mimeType'], 'application/json');
+      final schema = text['schema'] as Map<String, dynamic>;
+      expect(schema['additionalProperties'], isFalse);
+      expect(
+        (schema['required'] as List<dynamic>),
+        containsAll(['workTypes', 'plotKeywords', 'confidence']),
+      );
+      expect(jsonEncode(sent), contains('TMDB/AniList ID'));
+    });
+
+    test('retries a 429 at most once', () async {
+      var calls = 0;
+      final parser = GeminiQueryParser(
+        client: MockClient((request) async {
+          calls += 1;
+          if (calls == 1) {
+            return http.Response(
+              '{"error":{"status":"RESOURCE_EXHAUSTED"}}',
+              429,
+              headers: {'retry-after': '0'},
+            );
+          }
+          return _geminiResponse(_validIntent);
+        }),
+        apiKey: 'test-key',
+        model: 'gemini-3.5-flash-lite',
+        thinkingLevel: 'minimal',
+        timeout: const Duration(seconds: 1),
+        maxTokens: 500,
+        delay: (_) async {},
+      );
+
+      await parser.parse(request);
+
+      expect(calls, 2);
+    });
+
+    test('empty response falls back without inventing a title', () async {
+      final controller = _geminiController(
+        MockClient((request) async => _geminiResponse(null)),
+      );
+
+      final intent = await controller.parse(request);
+
+      expect(intent.plotKeywords, contains('portals'));
+      expect(controller.status, AiProviderStatus.error);
+      expect(controller.providerCalls, 1);
+    });
+
+    for (final status in [400, 401, 403, 404]) {
+      test('$status uses deterministic fallback', () async {
+        final controller = _geminiController(
+          MockClient((request) async => http.Response('{}', status)),
+        );
+
+        final intent = await controller.parse(request);
+
+        expect(intent.workTypes, contains('animated_series'));
+        expect(controller.status, AiProviderStatus.error);
+      });
+    }
+
+    test('quota exhaustion is reported without breaking search', () async {
+      var calls = 0;
+      final controller = _geminiController(
+        MockClient((request) async {
+          calls += 1;
+          return http.Response(
+            '{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota"}}',
+            429,
+            headers: {'retry-after': '0'},
+          );
+        }),
+      );
+
+      final intent = await controller.parse(request);
+
+      expect(calls, 2);
+      expect(intent.plotKeywords, contains('parallel world'));
+      expect(controller.status, AiProviderStatus.noFunds);
+    });
+
+    test('timeout uses deterministic fallback', () async {
+      final controller = AiParserController(
+        provider: 'gemini',
+        model: 'gemini-3.5-flash-lite',
+        primary: GeminiQueryParser(
+          client: MockClient((request) async {
+            await Future<void>.delayed(const Duration(milliseconds: 40));
+            return _geminiResponse(_validIntent);
+          }),
+          apiKey: 'test-key',
+          model: 'gemini-3.5-flash-lite',
+          thinkingLevel: 'minimal',
+          timeout: const Duration(milliseconds: 1),
+          maxTokens: 500,
+        ),
+        fallback: FallbackQueryParser(),
+        initialStatus: AiProviderStatus.fallback,
+      );
+
+      final intent = await controller.parse(request);
+
+      expect(intent.plotKeywords, contains('mechanical creatures'));
+      expect(controller.status, AiProviderStatus.error);
+    });
+  });
+
   group('DeepSeekQueryParser', () {
     test('parses valid JSON and explicitly disables thinking', () async {
       Map<String, dynamic>? sent;
@@ -136,6 +268,35 @@ void main() {
   });
 
   group('provider selection', () {
+    test('selects Gemini by default', () {
+      final parser = createAiQueryParser(
+        AiSettings.fromEnvironment(const {
+          'AI_ENABLED': 'true',
+          'GEMINI_API_KEY': 'test-key',
+        }),
+      );
+
+      expect(parser.provider, 'gemini');
+      expect(parser.model, 'gemini-3.5-flash-lite');
+      expect(parser.status, AiProviderStatus.fallback);
+    });
+
+    test('reports a missing Gemini key without a network call', () async {
+      final parser = createAiQueryParser(
+        AiSettings.fromEnvironment(const {
+          'AI_ENABLED': 'true',
+          'AI_PROVIDER': 'gemini',
+        }),
+      );
+
+      final intent = await parser.parse(request);
+
+      expect(parser.provider, 'gemini');
+      expect(parser.status, AiProviderStatus.noKey);
+      expect(parser.providerCalls, 0);
+      expect(intent.workTypes, contains('animated_series'));
+    });
+
     test(
       'selects DeepSeek and reports missing key without a network call',
       () async {
@@ -242,6 +403,37 @@ void main() {
     },
   );
 }
+
+AiParserController _geminiController(http.Client client) => AiParserController(
+  provider: 'gemini',
+  model: 'gemini-3.5-flash-lite',
+  primary: GeminiQueryParser(
+    client: client,
+    apiKey: 'test-key',
+    model: 'gemini-3.5-flash-lite',
+    thinkingLevel: 'minimal',
+    timeout: const Duration(seconds: 1),
+    maxTokens: 500,
+    delay: (_) async {},
+  ),
+  fallback: FallbackQueryParser(),
+  initialStatus: AiProviderStatus.fallback,
+);
+
+http.Response _geminiResponse(Map<String, dynamic>? intent) => http.Response(
+  jsonEncode({
+    'candidates': [
+      {
+        'content': {
+          'parts': [
+            {'text': intent == null ? '' : jsonEncode(intent)},
+          ],
+        },
+      },
+    ],
+  }),
+  200,
+);
 
 AiParserController _deepSeekController(http.Client client) =>
     AiParserController(
