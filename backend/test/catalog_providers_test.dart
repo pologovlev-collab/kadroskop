@@ -86,6 +86,44 @@ void main() {
     expect((result['provenance'] as List), hasLength(2));
     expect(result['dedupeConfidence'], greaterThanOrEqualTo(.9));
   });
+
+  test('AniList character pool returns verified media', () async {
+    final gateway = CatalogGateway(
+      MockClient((request) async {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body['query'], contains('SearchCharacters'));
+        expect((body['variables'] as Map)['search'], 'Naruto Uzumaki');
+        return _jsonResponse({
+          'data': {
+            'Page': {
+              'characters': [
+                {
+                  'name': {'full': 'Naruto Uzumaki', 'native': 'うずまきナルト'},
+                  'media': {
+                    'nodes': (_aniListSearch['data']! as Map)['Page']['media'],
+                  },
+                },
+              ],
+            },
+          },
+        });
+      }),
+      settings: const CatalogSettings(
+        tmdbEnabled: false,
+        jikanEnabled: false,
+        tvMazeEnabled: false,
+      ),
+    );
+
+    final page = await gateway.searchByCharacters(['Naruto Uzumaki']);
+
+    expect(page.results, hasLength(1));
+    expect(page.results.single['title'], 'Naruto');
+    expect(
+      ((page.results.single['characters'] as List).single as Map)['name'],
+      'Naruto Uzumaki',
+    );
+  });
 }
 
 http.Response _jsonResponse(Object value) => http.Response.bytes(

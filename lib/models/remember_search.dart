@@ -69,6 +69,8 @@ class RememberCandidate {
     required this.overview,
     required this.matchScore,
     required this.matchReasons,
+    required this.scoreBreakdown,
+    required this.lowConfidence,
     required this.rating,
     required this.genres,
   });
@@ -83,6 +85,8 @@ class RememberCandidate {
   final String overview;
   final double matchScore;
   final List<String> matchReasons;
+  final Map<String, double> scoreBreakdown;
+  final bool lowConfidence;
   final double rating;
   final List<String> genres;
 
@@ -107,6 +111,10 @@ class RememberCandidate {
       matchReasons: (json['matchReasons'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .toList(),
+      scoreBreakdown: ((json['scoreBreakdown'] as Map?) ?? const {}).map(
+        (key, value) => MapEntry('$key', value is num ? value.toDouble() : 0),
+      ),
+      lowConfidence: (json['lowConfidence'] as bool?) ?? false,
       rating: ((json['rating'] as num?) ?? 0).toDouble(),
       genres: (json['genres'] as List<dynamic>? ?? const [])
           .whereType<String>()
@@ -140,10 +148,12 @@ class RememberSearchResult {
     required this.candidates,
     required this.warnings,
     required this.ai,
+    this.guidance,
   });
   final List<RememberCandidate> candidates;
   final List<String> warnings;
   final Map<String, dynamic> ai;
+  final String? guidance;
 }
 
 class CatalogPage {

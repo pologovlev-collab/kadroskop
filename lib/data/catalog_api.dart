@@ -95,6 +95,7 @@ class CatalogApi implements CatalogSource {
           .whereType<String>()
           .toList(),
       ai: (data['ai'] as Map?)?.cast<String, dynamic>() ?? const {},
+      guidance: data['guidance'] as String?,
     );
   }
 

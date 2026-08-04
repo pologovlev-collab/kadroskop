@@ -31,6 +31,7 @@ class _RememberPageState extends State<RememberPage> {
   List<RememberCandidate> _candidates = const [];
   List<String> _warnings = const [];
   Map<String, dynamic> _ai = const {};
+  String? _guidance;
   RememberSearchFilters? _lastFilters;
   String? _error;
   bool _loading = false;
@@ -84,6 +85,7 @@ class _RememberPageState extends State<RememberPage> {
         _candidates = result.candidates;
         _warnings = result.warnings;
         _ai = result.ai;
+        _guidance = result.guidance;
         _cardIndex = 0;
       });
     } catch (error) {
@@ -137,7 +139,7 @@ class _RememberPageState extends State<RememberPage> {
             Text('Вспомнить', style: Theme.of(context).textTheme.displaySmall),
             const SizedBox(height: 7),
             Text(
-              'Опишите сюжет своими словами — названия в ответе будут только из TMDB и AniList',
+              'Опишите сюжет своими словами — названия в ответе будут только из TMDB, AniList, Jikan и TVmaze',
               style: Theme.of(
                 context,
               ).textTheme.bodyLarge?.copyWith(color: AppColors.muted),
@@ -209,7 +211,7 @@ class _RememberPageState extends State<RememberPage> {
                 ),
             ] else if (_lastFilters != null && _error == null) ...[
               const SizedBox(height: 50),
-              const _NoCandidates(),
+              _NoCandidates(message: _guidance),
             ] else ...[
               const SizedBox(height: 34),
               const _RememberIntro(),
@@ -518,6 +520,13 @@ class _CandidateCard extends StatelessWidget {
                     Text('${candidate.year} · ${candidate.type.label}'),
                     const SizedBox(height: 10),
                     _MatchBadge(score: candidate.matchScore),
+                    if (candidate.lowConfidence) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Низкая уверенность',
+                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -640,7 +649,7 @@ class _MatchBadge extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
     ),
     child: Text(
-      'Совпадение ${(score * 100).round()}%',
+      'Совпадение ${score.round()}%',
       style: const TextStyle(
         color: AppColors.accent,
         fontWeight: FontWeight.w800,
@@ -676,7 +685,8 @@ class _RememberIntro extends StatelessWidget {
 }
 
 class _NoCandidates extends StatelessWidget {
-  const _NoCandidates();
+  const _NoCandidates({this.message});
+  final String? message;
   @override
   Widget build(BuildContext context) => Center(
     child: Column(
@@ -692,10 +702,10 @@ class _NoCandidates extends StatelessWidget {
           style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 6),
-        const Text(
-          'Добавьте ещё одну сюжетную деталь или расширьте период.',
+        Text(
+          message ?? 'Добавьте ещё одну сюжетную деталь или расширьте период.',
           textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.muted),
+          style: const TextStyle(color: AppColors.muted),
         ),
       ],
     ),

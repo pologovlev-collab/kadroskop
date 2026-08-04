@@ -27,6 +27,7 @@ class TmdbCatalogProvider extends _CallbackCatalogProvider {
            'documentary',
          },
          sources: const {'tmdb_movie', 'tmdb_tv'},
+         characterSearchCallback: null,
        );
 }
 
@@ -37,10 +38,12 @@ class AniListCatalogProvider extends _CallbackCatalogProvider {
     required super.popularCallback,
     required super.discoverCallback,
     required super.detailsCallback,
+    required CatalogListCallback characterSearchCallback,
   }) : super(
          name: 'anilist',
          kinds: const {'anime', 'cartoon', 'animatedSeries'},
          sources: const {'anilist'},
+         characterSearchCallback: characterSearchCallback,
        );
 }
 
@@ -54,6 +57,7 @@ class _CallbackCatalogProvider implements CatalogProvider {
     required this.popularCallback,
     required this.discoverCallback,
     required this.detailsCallback,
+    required this.characterSearchCallback,
   });
 
   @override
@@ -66,6 +70,10 @@ class _CallbackCatalogProvider implements CatalogProvider {
   final CatalogListCallback popularCallback;
   final CatalogListCallback discoverCallback;
   final CatalogDetailsCallback detailsCallback;
+  final CatalogListCallback? characterSearchCallback;
+
+  @override
+  bool get supportsCharacterSearch => characterSearchCallback != null;
 
   @override
   bool supportsKind(String? kind) => kind == null || kinds.contains(kind);
@@ -88,6 +96,18 @@ class _CallbackCatalogProvider implements CatalogProvider {
   @override
   Future<CatalogMedia> details(String source, String id) async =>
       CatalogMedia.fromJson(await detailsCallback(source, id));
+
+  @override
+  Future<List<CatalogMedia>> searchByCharacter(
+    String characterName, {
+    int page = 1,
+  }) async {
+    final callback = characterSearchCallback;
+    if (callback == null) return const [];
+    return (await callback(
+      CatalogProviderRequest(query: characterName, page: page),
+    )).map(CatalogMedia.fromJson).toList();
+  }
 }
 
 class JikanCatalogProvider implements CatalogProvider {
@@ -108,6 +128,8 @@ class JikanCatalogProvider implements CatalogProvider {
 
   @override
   String get name => 'jikan';
+  @override
+  bool get supportsCharacterSearch => true;
   @override
   final bool enabled;
   final String _baseUrl;
@@ -188,6 +210,53 @@ class JikanCatalogProvider implements CatalogProvider {
       );
     }
     return _mapMedia(data.cast<String, dynamic>());
+  }
+
+  @override
+  Future<List<CatalogMedia>> searchByCharacter(
+    String characterName, {
+    int page = 1,
+  }) async {
+    final searchPayload = await _http.get(
+      Uri.parse('$_baseUrl/characters').replace(
+        queryParameters: {'q': characterName, 'page': '$page', 'limit': '3'},
+      ),
+    );
+    final rows = searchPayload is Map
+        ? (searchPayload['data'] as List<dynamic>? ?? const [])
+        : const <dynamic>[];
+    final animeIds = <int>{};
+    for (final character in rows.whereType<Map>().take(3)) {
+      final characterId = (character['mal_id'] as num?)?.toInt();
+      if (characterId == null) continue;
+      final full = await _http.get(
+        Uri.parse('$_baseUrl/characters/$characterId/full'),
+      );
+      final data = full is Map ? full['data'] : null;
+      if (data is! Map) continue;
+      for (final credit in (data['anime'] as List<dynamic>? ?? const [])) {
+        if (credit is! Map) continue;
+        final anime = credit['anime'];
+        if (anime is Map && anime['mal_id'] is num) {
+          animeIds.add((anime['mal_id'] as num).toInt());
+        }
+        if (animeIds.length >= 8) break;
+      }
+      if (animeIds.length >= 8) break;
+    }
+    final results = <CatalogMedia>[];
+    for (final animeId in animeIds.take(8)) {
+      final media = await details('jikan', '$animeId');
+      results.add(
+        CatalogMedia.fromJson({
+          ...media.toJson(),
+          'characters': [
+            {'name': characterName},
+          ],
+        }),
+      );
+    }
+    return results;
   }
 
   List<CatalogMedia> _mediaList(Object? payload) {
@@ -302,6 +371,8 @@ class TvMazeCatalogProvider implements CatalogProvider {
   @override
   String get name => 'tvmaze';
   @override
+  bool get supportsCharacterSearch => false;
+  @override
   final bool enabled;
   final String _baseUrl;
   final _ProviderHttp _http;
@@ -386,6 +457,12 @@ class TvMazeCatalogProvider implements CatalogProvider {
     }
     return _mapShow(payload.cast<String, dynamic>());
   }
+
+  @override
+  Future<List<CatalogMedia>> searchByCharacter(
+    String characterName, {
+    int page = 1,
+  }) async => const [];
 
   CatalogMedia _mapShow(Map<String, dynamic> row, {double? searchScore}) {
     final id = (row['id'] as num?)?.toInt() ?? 0;

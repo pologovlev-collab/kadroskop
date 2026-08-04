@@ -154,7 +154,19 @@ class MemoryAiIntentCache implements AiIntentCache {
   Future<void> close() async {}
 }
 
-String rememberFiltersHash(RememberSearchRequest request) {
-  final canonical = jsonEncode(request.cacheFilters);
+const rememberSearchAlgorithmVersion = 'remember-search-v2-characters-2026-08';
+
+String rememberFiltersHash(
+  RememberSearchRequest request, {
+  required String provider,
+  required String model,
+  String algorithmVersion = rememberSearchAlgorithmVersion,
+}) {
+  final canonical = jsonEncode({
+    ...request.cacheFilters,
+    'provider': provider,
+    'model': model,
+    'algorithmVersion': algorithmVersion,
+  });
   return sha256.convert(utf8.encode(canonical)).toString();
 }

@@ -114,6 +114,7 @@ class CatalogGateway {
         popularCallback: _legacyAniListPopular,
         discoverCallback: _legacyAniListDiscover,
         detailsCallback: _legacyAniListDetails,
+        characterSearchCallback: _legacyAniListCharacterSearch,
       ),
       JikanCatalogProvider(
         client: _client,
@@ -209,6 +210,64 @@ class CatalogGateway {
     );
     _cache.write(cacheKey, value, ttl: _settings.cacheTtl);
     return value;
+  }
+
+  Future<CatalogSearchPage> searchByCharacters(
+    List<String> characterNames, {
+    int page = 1,
+  }) async {
+    final names = characterNames
+        .map((name) => name.trim())
+        .where((name) => name.length >= 2)
+        .toSet()
+        .take(4)
+        .toList();
+    if (names.isEmpty) {
+      return CatalogSearchPage(
+        results: const [],
+        page: page,
+        hasMore: false,
+        warnings: const [],
+        providers: diagnostics,
+      );
+    }
+    final safePage = _safePage(page);
+    final cacheKey = 'characters:${names.join('|')}:$safePage';
+    final cached = _cache.read<CatalogSearchPage>(cacheKey);
+    if (cached != null) return cached;
+    final operations = _providers
+        .where(
+          (provider) => provider.enabled && provider.supportsCharacterSearch,
+        )
+        .map(
+          (provider) => _ProviderOperation(provider.name, () async {
+            final results = <CatalogMedia>[];
+            for (final name in names) {
+              results.addAll(
+                await provider.searchByCharacter(name, page: safePage),
+              );
+            }
+            return results;
+          }),
+        )
+        .toList();
+    if (operations.isEmpty) {
+      return CatalogSearchPage(
+        results: const [],
+        page: safePage,
+        hasMore: false,
+        warnings: const ['Поиск по персонажам временно недоступен.'],
+        providers: diagnostics,
+      );
+    }
+    final result = await _runOperations(
+      operations,
+      kind: null,
+      page: safePage,
+      recordAliases: true,
+    );
+    _cache.write(cacheKey, result, ttl: _settings.cacheTtl);
+    return result;
   }
 
   Future<CatalogSearchPage> popular({String? kind, int page = 1}) async {
@@ -520,6 +579,35 @@ class CatalogGateway {
   Future<List<Map<String, Object?>>> _legacyAniListPopular(
     CatalogProviderRequest request,
   ) => _popularAniList(page: request.page);
+
+  Future<List<Map<String, Object?>>> _legacyAniListCharacterSearch(
+    CatalogProviderRequest request,
+  ) async {
+    final response = await _postAniList(_aniListCharacterSearchQuery, {
+      'search': request.query,
+      'page': request.page,
+    });
+    final data = response['data'] as Map<String, dynamic>? ?? const {};
+    final page = data['Page'] as Map<String, dynamic>? ?? const {};
+    final byId = <String, Map<String, Object?>>{};
+    for (final character
+        in (page['characters'] as List<dynamic>? ?? const [])) {
+      if (character is! Map) continue;
+      final name = character['name'] as Map? ?? const {};
+      final characterName = (name['full'] ?? name['native'] ?? request.query)
+          .toString();
+      final media = character['media'] as Map? ?? const {};
+      for (final node in (media['nodes'] as List<dynamic>? ?? const [])) {
+        if (node is! Map<String, dynamic>) continue;
+        final mapped = _mapAniList(node);
+        mapped['characters'] = [
+          {'name': characterName},
+        ];
+        byId['${mapped['externalId']}'] = mapped;
+      }
+    }
+    return byId.values.toList();
+  }
 
   Future<List<Map<String, Object?>>> _legacyAniListDiscover(
     CatalogProviderRequest request,
@@ -1348,6 +1436,22 @@ query SearchAnime(\$search: String!, \$page: Int!) {
   Page(page: \$page, perPage: 20) {
     media(search: \$search, type: ANIME, sort: SEARCH_MATCH) {
       $_aniListFields
+    }
+  }
+}
+''';
+
+const _aniListCharacterSearchQuery =
+    '''
+query SearchCharacters(\$search: String!, \$page: Int!) {
+  Page(page: \$page, perPage: 8) {
+    characters(search: \$search, sort: FAVOURITES_DESC) {
+      name { full native }
+      media(perPage: 20, sort: POPULARITY_DESC) {
+        nodes {
+          $_aniListFields
+        }
+      }
     }
   }
 }

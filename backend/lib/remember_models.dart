@@ -126,6 +126,8 @@ class RememberSearchRequest {
     'yearTo': yearTo,
     'country': country,
     'visualStyle': visualStyle,
+    'excluded': [...excluded]..sort(),
+    'similarTo': similarTo?.toJson(),
   };
 }
 
@@ -133,6 +135,8 @@ class RememberReference {
   const RememberReference({required this.source, required this.sourceId});
   final String source;
   final String sourceId;
+
+  Map<String, Object?> toJson() => {'source': source, 'sourceId': sourceId};
 
   factory RememberReference.fromJson(Map<String, dynamic> json) {
     const allowed = {'source', 'sourceId'};
@@ -155,6 +159,12 @@ class RememberSearchIntent {
     this.yearTo,
     this.genres = const [],
     this.plotKeywords = const [],
+    this.titleFragments = const [],
+    this.characterNames = const [],
+    this.franchiseTerms = const [],
+    this.locations = const [],
+    this.objects = const [],
+    this.searchVariants = const [],
     this.originalLanguageHints = const [],
     this.countries = const [],
     this.visualStyle,
@@ -168,6 +178,12 @@ class RememberSearchIntent {
   final int? yearTo;
   final List<String> genres;
   final List<String> plotKeywords;
+  final List<String> titleFragments;
+  final List<String> characterNames;
+  final List<String> franchiseTerms;
+  final List<String> locations;
+  final List<String> objects;
+  final List<String> searchVariants;
   final List<String> originalLanguageHints;
   final List<String> countries;
   final String? visualStyle;
@@ -182,6 +198,12 @@ class RememberSearchIntent {
       'yearTo',
       'genres',
       'plotKeywords',
+      'titleFragments',
+      'characterNames',
+      'franchiseTerms',
+      'locations',
+      'objects',
+      'searchVariants',
       'originalLanguageHints',
       'countries',
       'visualStyle',
@@ -219,6 +241,16 @@ class RememberSearchIntent {
       yearTo: yearTo,
       genres: _stringList(json['genres'], max: 8, itemMax: 50),
       plotKeywords: _stringList(json['plotKeywords'], max: 16, itemMax: 80),
+      titleFragments: _stringList(json['titleFragments'], max: 6, itemMax: 100),
+      characterNames: _stringList(json['characterNames'], max: 8, itemMax: 80),
+      franchiseTerms: _stringList(json['franchiseTerms'], max: 6, itemMax: 100),
+      locations: _stringList(json['locations'], max: 8, itemMax: 80),
+      objects: _stringList(json['objects'], max: 8, itemMax: 80),
+      searchVariants: _stringList(
+        json['searchVariants'],
+        max: 10,
+        itemMax: 100,
+      ),
       originalLanguageHints: _stringList(
         json['originalLanguageHints'],
         max: 5,
@@ -250,6 +282,12 @@ class RememberSearchIntent {
     int? yearTo,
     List<String>? genres,
     List<String>? plotKeywords,
+    List<String>? titleFragments,
+    List<String>? characterNames,
+    List<String>? franchiseTerms,
+    List<String>? locations,
+    List<String>? objects,
+    List<String>? searchVariants,
     List<String>? originalLanguageHints,
     List<String>? countries,
     String? visualStyle,
@@ -262,6 +300,12 @@ class RememberSearchIntent {
     yearTo: yearTo ?? this.yearTo,
     genres: genres ?? this.genres,
     plotKeywords: plotKeywords ?? this.plotKeywords,
+    titleFragments: titleFragments ?? this.titleFragments,
+    characterNames: characterNames ?? this.characterNames,
+    franchiseTerms: franchiseTerms ?? this.franchiseTerms,
+    locations: locations ?? this.locations,
+    objects: objects ?? this.objects,
+    searchVariants: searchVariants ?? this.searchVariants,
     originalLanguageHints: originalLanguageHints ?? this.originalLanguageHints,
     countries: countries ?? this.countries,
     visualStyle: visualStyle ?? this.visualStyle,
@@ -276,6 +320,12 @@ class RememberSearchIntent {
     'yearTo': yearTo,
     'genres': genres,
     'plotKeywords': plotKeywords,
+    'titleFragments': titleFragments,
+    'characterNames': characterNames,
+    'franchiseTerms': franchiseTerms,
+    'locations': locations,
+    'objects': objects,
+    'searchVariants': searchVariants,
     'originalLanguageHints': originalLanguageHints,
     'countries': countries,
     'visualStyle': visualStyle,

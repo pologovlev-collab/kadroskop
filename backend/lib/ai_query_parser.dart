@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'remember_models.dart';
+import 'query_normalizer.dart';
 
 abstract interface class AiQueryParser {
   Future<RememberSearchIntent> parse(RememberSearchRequest request);
@@ -505,6 +506,16 @@ class FallbackQueryParser implements AiQueryParser {
     _addByPattern(text, countries, _countryPatterns);
     final plotKeywords = <String>{};
     _addByPattern(text, plotKeywords, _plotPatterns);
+    final titleFragments = _extractQuotedFragments(request.query);
+    final characterNames = _extractCharacterNames(request.query);
+    final locations = <String>{};
+    _addByPattern(text, locations, _locationPatterns);
+    final objects = <String>{};
+    _addByPattern(text, objects, _objectPatterns);
+    final searchVariants = <String>{};
+    for (final fragment in [...titleFragments, ...characterNames]) {
+      searchVariants.addAll(confirmedTitleAliases(fragment.toLowerCase()));
+    }
     final visualStyle = text.contains('куколь') || text.contains('stop motion')
         ? 'puppet'
         : text.contains('3d') || text.contains('3д')
@@ -520,6 +531,11 @@ class FallbackQueryParser implements AiQueryParser {
         yearTo: years.$2,
         genres: genres.toList(),
         plotKeywords: plotKeywords.toList(),
+        titleFragments: titleFragments,
+        characterNames: characterNames,
+        locations: locations.toList(),
+        objects: objects.toList(),
+        searchVariants: searchVariants.toList(),
         countries: countries.toList(),
         visualStyle: visualStyle,
         targetAudience: text.contains('подрост') ? 'teenagers' : null,
@@ -713,6 +729,61 @@ const _plotPatterns = {
   'пустын': 'desert',
 };
 
+const _locationPatterns = {
+  'другой мир': 'parallel world',
+  'параллельн': 'parallel world',
+  'космос': 'space',
+  'школ': 'school',
+  'остров': 'island',
+  'пустын': 'desert',
+  'подзем': 'underground',
+  'город': 'city',
+};
+
+const _objectPatterns = {
+  'портал': 'portals',
+  'механическ': 'mechanical creatures',
+  'робот': 'robots',
+  'маск': 'mask',
+  'меч': 'sword',
+  'кольц': 'ring',
+  'амулет': 'amulet',
+  'машин времени': 'time machine',
+};
+
+List<String> _extractQuotedFragments(String value) => RegExp(
+  r'[«"“]([^»"”]{2,100})[»"”]',
+).allMatches(value).map((match) => match.group(1)!.trim()).toSet().toList();
+
+List<String> _extractCharacterNames(String value) {
+  final names = <String>{};
+  final expressions = [
+    RegExp(
+      r'(?:злодея|злодейку|героя|героиню|персонажа|мальчика|девочку)\s+(?:звали|по имени)\s+([a-zа-яё-]{2,40})',
+      caseSensitive: false,
+    ),
+    RegExp(r'(?:звали|по имени)\s+([a-zа-яё-]{2,40})', caseSensitive: false),
+  ];
+  for (final expression in expressions) {
+    for (final match in expression.allMatches(value)) {
+      names.add(match.group(1)!.trim());
+    }
+  }
+  final normalized = value.toLowerCase().replaceAll('ё', 'е');
+  for (final entry in _knownCharacterAliases.entries) {
+    if (normalized.contains(entry.key)) names.add(entry.value);
+  }
+  return names.take(8).toList();
+}
+
+const _knownCharacterAliases = {
+  'фобос': 'Phobos',
+  'наруто': 'Naruto Uzumaki',
+  'ичиго': 'Ichigo Kurosaki',
+  'сейлор мун': 'Usagi Tsukino',
+  'рик санчез': 'Rick Sanchez',
+};
+
 const Map<String, Object?> _rememberIntentJsonSchema = {
   'type': 'object',
   'additionalProperties': false,
@@ -754,6 +825,36 @@ const Map<String, Object?> _rememberIntentJsonSchema = {
       'items': {'type': 'string'},
       'maxItems': 16,
     },
+    'titleFragments': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 6,
+    },
+    'characterNames': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 8,
+    },
+    'franchiseTerms': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 6,
+    },
+    'locations': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 8,
+    },
+    'objects': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 8,
+    },
+    'searchVariants': {
+      'type': 'array',
+      'items': {'type': 'string'},
+      'maxItems': 10,
+    },
     'originalLanguageHints': {
       'type': 'array',
       'items': {'type': 'string'},
@@ -792,6 +893,12 @@ const Map<String, Object?> _rememberIntentJsonSchema = {
     'yearTo',
     'genres',
     'plotKeywords',
+    'titleFragments',
+    'characterNames',
+    'franchiseTerms',
+    'locations',
+    'objects',
+    'searchVariants',
     'originalLanguageHints',
     'countries',
     'visualStyle',
@@ -803,7 +910,7 @@ const Map<String, Object?> _rememberIntentJsonSchema = {
 
 const _systemPrompt = '''
 Верни только один JSON-объект с признаками забытого произведения. Не предлагай и не угадывай названия. Не создавай фильмы, аниме или сериалы. Не возвращай TMDB/AniList ID, обложки, рейтинги или пояснения. Извлекай только признаки из пользовательского текста.
-Допустимые поля: workTypes (movie|series|anime|cartoon|animated_series|documentary), yearFrom, yearTo, genres, plotKeywords, originalLanguageHints, countries, visualStyle (2d|3d|puppet|unknown|null), targetAudience, negativeKeywords, confidence (0..1). Массивы должны быть короткими, значения жанров и сюжетных признаков — на английском.
-Пример JSON: {"workTypes":["animated_series","anime"],"yearFrom":1995,"yearTo":2012,"genres":["science fiction","adventure"],"plotKeywords":["teenagers","portals","parallel world","mechanical creatures"],"originalLanguageHints":[],"countries":[],"visualStyle":null,"targetAudience":null,"negativeKeywords":[],"confidence":0.82}
+Допустимые поля: workTypes (movie|series|anime|cartoon|animated_series|documentary), yearFrom, yearTo, genres, plotKeywords, titleFragments, characterNames, franchiseTerms, locations, objects, searchVariants, originalLanguageHints, countries, visualStyle (2d|3d|puppet|unknown|null), targetAudience, negativeKeywords, confidence (0..1). titleFragments содержит только буквально названные пользователем фрагменты, characterNames — только упомянутые имена; не угадывай итоговое произведение. Массивы должны быть короткими, значения жанров и сюжетных признаков — на английском.
+Пример JSON: {"workTypes":["animated_series","anime"],"yearFrom":1995,"yearTo":2012,"genres":["science fiction","adventure"],"plotKeywords":["teenagers","portals","parallel world","mechanical creatures"],"titleFragments":[],"characterNames":[],"franchiseTerms":[],"locations":["parallel world"],"objects":["portals","mechanical creatures"],"searchVariants":[],"originalLanguageHints":[],"countries":[],"visualStyle":null,"targetAudience":null,"negativeKeywords":[],"confidence":0.82}
 Отвечай только JSON.
 ''';

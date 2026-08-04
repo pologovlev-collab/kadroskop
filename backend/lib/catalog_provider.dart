@@ -3,12 +3,17 @@ import 'dart:convert';
 abstract interface class CatalogProvider {
   String get name;
   bool get enabled;
+  bool get supportsCharacterSearch;
   bool supportsKind(String? kind);
   bool supportsSource(String source);
 
   Future<List<CatalogMedia>> search(CatalogProviderRequest request);
   Future<List<CatalogMedia>> popular(CatalogProviderRequest request);
   Future<List<CatalogMedia>> discover(CatalogProviderRequest request);
+  Future<List<CatalogMedia>> searchByCharacter(
+    String characterName, {
+    int page = 1,
+  });
   Future<CatalogMedia> details(String source, String id);
 }
 
