@@ -191,7 +191,7 @@ class _Hero extends StatelessWidget {
               onTap: () => onOpen(item!),
               child: SizedBox(
                 width: compact ? 150 : 210,
-                child: PosterArtwork(item: item!, height: compact ? 210 : 300),
+                child: PosterArtwork(item: item!, height: compact ? 225 : 315),
               ),
             );
       return Container(

@@ -20,6 +20,7 @@ class MediaItem {
     this.source = 'local',
     this.externalId,
     this.posterUrl,
+    this.backdropUrl,
     this.runtimeMinutes = 0,
     this.seasonCount = 0,
     this.episodeCount = 0,
@@ -43,6 +44,7 @@ class MediaItem {
   final String source;
   final String? externalId;
   final String? posterUrl;
+  final String? backdropUrl;
   final int runtimeMinutes;
   final int seasonCount;
   final int episodeCount;
@@ -79,6 +81,7 @@ class MediaItem {
     source: source,
     externalId: externalId,
     posterUrl: posterUrl,
+    backdropUrl: backdropUrl,
     runtimeMinutes: runtimeMinutes,
     seasonCount: seasonCount,
     episodeCount: episodeCount,
@@ -94,7 +97,7 @@ class MediaItem {
     id: map['id']! as int,
     title: map['title']! as String,
     subtitle: (map['subtitle'] as String?) ?? '',
-    description: (map['description'] as String?) ?? '',
+    description: cleanMediaText((map['description'] as String?) ?? ''),
     year: (map['release_year'] as int?) ?? 0,
     kind: MediaKind.values.firstWhere(
       (value) => value.name == map['kind'],
@@ -112,6 +115,7 @@ class MediaItem {
     source: (map['source'] as String?) ?? 'local',
     externalId: map['external_id']?.toString(),
     posterUrl: map['poster_url'] as String?,
+    backdropUrl: map['backdrop_url'] as String?,
     runtimeMinutes: (map['runtime_minutes'] as int?) ?? 0,
     seasonCount: (map['season_count'] as int?) ?? 0,
     episodeCount: (map['episode_count'] as int?) ?? 0,
@@ -145,7 +149,7 @@ class MediaItem {
       id: (json['id'] as num).toInt(),
       title: (json['title'] as String?) ?? 'Без названия',
       subtitle: (json['subtitle'] as String?) ?? '',
-      description: (json['description'] as String?) ?? '',
+      description: cleanMediaText((json['description'] as String?) ?? ''),
       year: ((json['year'] as num?) ?? 0).toInt(),
       kind: kind,
       rating: ((json['rating'] as num?) ?? 0).toDouble(),
@@ -154,6 +158,7 @@ class MediaItem {
       source: (json['source'] as String?) ?? 'remote',
       externalId: json['externalId']?.toString(),
       posterUrl: json['posterUrl'] as String?,
+      backdropUrl: json['backdropUrl'] as String?,
       runtimeMinutes: ((json['runtimeMinutes'] as num?) ?? 0).toInt(),
       seasonCount: ((json['seasonCount'] as num?) ?? 0).toInt(),
       episodeCount: ((json['episodeCount'] as num?) ?? 0).toInt(),
@@ -179,6 +184,7 @@ class MediaItem {
     'source': source,
     'external_id': externalId,
     'poster_url': posterUrl,
+    'backdrop_url': backdropUrl,
     'runtime_minutes': runtimeMinutes,
     'season_count': seasonCount,
     'episode_count': episodeCount,
@@ -199,6 +205,20 @@ class MediaItem {
     }
   }
 }
+
+String cleanMediaText(String value) => value
+    .replaceAll(RegExp('<br\\s*/?>', caseSensitive: false), '\n')
+    .replaceAll(RegExp('<[^>]*>'), '')
+    .replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), '')
+    .replaceAllMapped(
+      RegExp(r'\[([^\]]+)\]\([^)]*\)'),
+      (match) => match.group(1) ?? '',
+    )
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#039;', "'")
+    .replaceAll('&amp;', '&')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim();
 
 class SeasonInfo {
   const SeasonInfo({

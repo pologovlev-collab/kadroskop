@@ -27,7 +27,11 @@ class PosterCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final posterHeight = compact ? width * .78 : width * 1.34;
+    final posterHeight = width * 1.5;
+    final originalTitle = item.subtitle.trim();
+    final description = item.description.isEmpty
+        ? 'Описание в каталоге пока отсутствует.'
+        : item.description;
     return SizedBox(
       width: width,
       child: Semantics(
@@ -67,54 +71,121 @@ class PosterCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 10),
-              Text(
-                item.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 3),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${item.year} · ${item.kind.label}',
-                      maxLines: 1,
+              SizedBox(
+                height: supportingText == null ? 210 : 275,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: AppColors.muted),
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  ),
-                  const SizedBox(width: 5),
-                  const Icon(
-                    Icons.star_rounded,
-                    color: Color(0xFFF0A429),
-                    size: 16,
-                  ),
-                  Text(
-                    item.rating.toStringAsFixed(1),
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ],
-              ),
-              if (supportingText case final text?) ...[
-                const SizedBox(height: 7),
-                Text(
-                  text,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: AppColors.muted),
+                    if (originalTitle.isNotEmpty &&
+                        originalTitle.toLowerCase() !=
+                            item.title.toLowerCase()) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        originalTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: AppColors.muted),
+                      ),
+                    ],
+                    const SizedBox(height: 5),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${item.year > 0 ? item.year : 'Год неизвестен'} · ${item.kind.label}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: AppColors.muted),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        const Icon(
+                          Icons.star_rounded,
+                          color: Color(0xFFF0A429),
+                          size: 16,
+                        ),
+                        Text(
+                          item.rating.toStringAsFixed(1),
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                      ],
+                    ),
+                    if (item.genres.isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        item.genres.take(2).join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                    const SizedBox(height: 7),
+                    Text(
+                      description,
+                      maxLines: compact ? 2 : 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.muted,
+                        height: 1.3,
+                      ),
+                    ),
+                    if (supportingText case final text?) ...[
+                      const SizedBox(height: 7),
+                      Text(
+                        text,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                    const Spacer(),
+                    _StatusPill(status: item.status),
+                  ],
                 ),
-              ],
+              ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.status});
+  final WatchStatus status;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    decoration: BoxDecoration(
+      color: status == WatchStatus.none
+          ? Theme.of(context).colorScheme.surfaceContainerHighest
+          : AppColors.accent.withValues(alpha: .12),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Text(
+      status.label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+        color: status == WatchStatus.none ? AppColors.muted : AppColors.accent,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
 }
 
 class _CardFavoriteButton extends StatefulWidget {

@@ -86,6 +86,23 @@ void main() {
       expect(result.items.single.media.id, similarSeries.id);
     },
   );
+
+  test('API media cleans markup and preserves portrait/backdrop URLs', () {
+    final item = MediaItem.fromApi({
+      'id': 99,
+      'source': 'tmdb_movie',
+      'externalId': '99',
+      'title': 'Clean title',
+      'description': '<b>Plot</b> with [link](https://example.test).',
+      'kind': 'movie',
+      'posterUrl': 'https://img.test/poster.jpg',
+      'backdropUrl': 'https://img.test/backdrop.jpg',
+    });
+
+    expect(item.description, 'Plot with link.');
+    expect(item.posterUrl, endsWith('poster.jpg'));
+    expect(item.backdropUrl, endsWith('backdrop.jpg'));
+  });
 }
 
 const series = MediaItem(

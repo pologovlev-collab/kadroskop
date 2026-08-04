@@ -333,7 +333,10 @@ String cleanCatalogText(String value) => value
     .replaceAll(RegExp('<br\\s*/?>', caseSensitive: false), '\n')
     .replaceAll(RegExp('<[^>]*>'), '')
     .replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), '')
-    .replaceAll(RegExp(r'\[([^\]]+)\]\([^)]*\)'), r'$1')
+    .replaceAllMapped(
+      RegExp(r'\[([^\]]+)\]\([^)]*\)'),
+      (match) => match.group(1) ?? '',
+    )
     .replaceAll('&quot;', '"')
     .replaceAll('&#039;', "'")
     .replaceAll('&amp;', '&')

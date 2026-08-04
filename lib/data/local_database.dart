@@ -18,7 +18,7 @@ class LocalDatabase {
     final db = await databaseFactoryFfi.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
-        version: 7,
+        version: 8,
         onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
         onCreate: (database, version) => _createSchema(database),
       ),
@@ -72,6 +72,11 @@ class LocalDatabase {
               'ALTER TABLE user_media ADD COLUMN favorite_updated_at TEXT',
             );
           }
+          if (oldVersion < 8) {
+            await database.execute(
+              'ALTER TABLE media ADD COLUMN backdrop_url TEXT',
+            );
+          }
         },
       ),
     );
@@ -94,6 +99,7 @@ class LocalDatabase {
         source TEXT NOT NULL DEFAULT 'local',
         external_id TEXT,
         poster_url TEXT,
+        backdrop_url TEXT,
         runtime_minutes INTEGER NOT NULL DEFAULT 0,
         season_count INTEGER NOT NULL DEFAULT 0,
         episode_count INTEGER NOT NULL DEFAULT 0,

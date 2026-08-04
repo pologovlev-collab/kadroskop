@@ -511,7 +511,7 @@ class _CandidateCard extends StatelessWidget {
             children: [
               SizedBox(
                 width: 118,
-                child: PosterArtwork(item: item, height: 168),
+                child: PosterArtwork(item: item, height: 177),
               ),
               const SizedBox(width: 14),
               Expanded(

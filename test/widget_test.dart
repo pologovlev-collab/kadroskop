@@ -69,6 +69,79 @@ void main() {
     expect(find.text('По сюжету'), findsOneWidget);
     expect(find.text('По жанрам'), findsOneWidget);
   });
+
+  testWidgets('desktop details keep a portrait poster and separate backdrop', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const title = 'Очень длинное название произведения для проверки компоновки';
+    const item = MediaItem(
+      id: 50,
+      title: title,
+      subtitle: 'Original very long title',
+      description:
+          'Длинное описание, которое должно оставаться читаемым и прокручиваться, не ломая вертикальную обложку и остальные действия подробного окна.',
+      year: 2026,
+      kind: MediaKind.movie,
+      rating: 8.4,
+      genres: ['Драма', 'Фантастика'],
+      colors: [Color(0xFF102030), Color(0xFF405060)],
+      posterUrl: 'https://img.test/portrait.jpg',
+      backdropUrl: 'https://img.test/backdrop.jpg',
+    );
+    await tester.pumpWidget(
+      KadroskopApp(repository: MemoryMediaRepository(const [item])),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text(title).last);
+    await tester.tap(find.text(title).last);
+    await tester.pumpAndSettle();
+
+    final posterSize = tester.getSize(
+      find.byKey(const ValueKey('details-poster')),
+    );
+    expect(posterSize.width / posterSize.height, closeTo(2 / 3, .02));
+    expect(posterSize.width, inInclusiveRange(260, 320));
+    expect(find.byKey(const ValueKey('details-backdrop')), findsOneWidget);
+    expect(find.byTooltip('Закрыть'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'mobile dark details use a portrait placeholder without backdrop',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      const item = MediaItem(
+        id: 51,
+        title: 'Карточка без постера',
+        subtitle: 'Missing poster',
+        description: 'Описание без изображения.',
+        year: 2020,
+        kind: MediaKind.series,
+        rating: 7.1,
+        genres: ['Драма'],
+        colors: [Color(0xFF102030), Color(0xFF405060)],
+      );
+      final repository = MemoryMediaRepository(const [item]);
+      repository.profile = repository.profile!.copyWith(darkTheme: true);
+      await tester.pumpWidget(KadroskopApp(repository: repository));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text(item.title).last);
+      await tester.tap(find.text(item.title).last);
+      await tester.pumpAndSettle();
+
+      final poster = find.byKey(const ValueKey('details-poster'));
+      final posterSize = tester.getSize(poster);
+      expect(posterSize, const Size(200, 300));
+      expect(find.byKey(const ValueKey('details-backdrop')), findsNothing);
+      expect(Theme.of(tester.element(poster)).brightness, Brightness.dark);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 const _items = [

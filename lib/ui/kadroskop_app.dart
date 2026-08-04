@@ -201,6 +201,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      constraints: const BoxConstraints(maxWidth: 1100),
       builder: (context) => _DetailsSheet(
         item: detailed,
         repository: widget.repository,
@@ -225,6 +226,7 @@ class _KadroskopShellState extends State<KadroskopShell> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      constraints: const BoxConstraints(maxWidth: 1500),
       builder: (context) => SimilarMediaSheet(
         reference: item,
         repository: widget.repository,
@@ -2221,7 +2223,7 @@ class _DetailsSheet extends StatelessWidget {
     return Align(
       alignment: Alignment.bottomCenter,
       child: Container(
-        constraints: BoxConstraints(maxWidth: 920, maxHeight: height),
+        constraints: BoxConstraints(maxWidth: 1040, maxHeight: height),
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
@@ -2241,17 +2243,61 @@ class _DetailsSheet extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 18),
+              Align(
+                alignment: Alignment.centerRight,
+                child: IconButton(
+                  tooltip: 'Закрыть',
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ),
+              if (item.backdropUrl case final backdrop?) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(22),
+                  child: SizedBox(
+                    height: 150,
+                    width: double.infinity,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.network(
+                          backdrop,
+                          key: const ValueKey('details-backdrop'),
+                          fit: BoxFit.cover,
+                          cacheWidth: 1200,
+                          filterQuality: FilterQuality.low,
+                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                        ),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Color(0x22000000), Color(0xCC000000)],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+              ],
               LayoutBuilder(
                 builder: (context, constraints) {
                   final compact = constraints.maxWidth < 640;
-                  final art = SizedBox(
-                    width: compact ? double.infinity : 270,
-                    child: Hero(
-                      tag: 'poster-${item.id}',
-                      child: PosterArtwork(
-                        item: item,
-                        height: compact ? 300 : 390,
+                  final posterWidth = compact ? 200.0 : 290.0;
+                  final art = Center(
+                    child: SizedBox(
+                      width: posterWidth,
+                      child: Hero(
+                        tag: 'poster-${item.id}',
+                        child: PosterArtwork(
+                          key: const ValueKey('details-poster'),
+                          item: item,
+                          height: posterWidth * 1.5,
+                          showTitle: item.posterUrl == null,
+                        ),
                       ),
                     ),
                   );
@@ -2276,11 +2322,6 @@ class _DetailsSheet extends StatelessWidget {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            onPressed: () => Navigator.pop(context),
-                            icon: const Icon(Icons.close_rounded),
                           ),
                         ],
                       ),

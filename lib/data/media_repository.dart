@@ -1077,6 +1077,7 @@ const _mediaExportColumns = {
   'source',
   'external_id',
   'poster_url',
+  'backdrop_url',
   'runtime_minutes',
   'season_count',
   'episode_count',

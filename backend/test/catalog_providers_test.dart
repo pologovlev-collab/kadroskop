@@ -6,6 +6,13 @@ import 'package:kadroskop_backend/kadroskop_server.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('catalog text removes HTML and markdown links', () {
+    expect(
+      cleanCatalogText('<b>Plot</b> with [source](https://example.test).'),
+      'Plot with source.',
+    );
+  });
+
   test('Jikan maps a real anime DTO and retries 429 only once', () async {
     var calls = 0;
     final provider = JikanCatalogProvider(
