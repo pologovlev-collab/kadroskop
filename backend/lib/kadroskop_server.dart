@@ -14,6 +14,8 @@ import 'remember_models.dart';
 import 'remember_search_service.dart';
 
 export 'catalog_gateway.dart';
+export 'catalog_provider.dart';
+export 'catalog_providers.dart';
 export 'ai_intent_cache.dart';
 export 'ai_query_parser.dart';
 export 'remember_models.dart';
@@ -23,6 +25,7 @@ Future<HttpServer> startKadroskopServer({
   required InternetAddress address,
   required int port,
   String? tmdbToken,
+  CatalogSettings? catalogSettings,
   CatalogGateway? catalogGateway,
   AiSettings? aiSettings,
   AiParserController? aiParser,
@@ -31,7 +34,12 @@ Future<HttpServer> startKadroskopServer({
   String aiCachePath = 'data/kadroskop_backend.db',
 }) {
   final catalog =
-      catalogGateway ?? CatalogGateway(http.Client(), tmdbToken: tmdbToken);
+      catalogGateway ??
+      CatalogGateway(
+        http.Client(),
+        tmdbToken: tmdbToken,
+        settings: catalogSettings,
+      );
   final settings =
       aiSettings ?? AiSettings.fromEnvironment(const {'AI_ENABLED': 'false'});
   final parser = aiParser ?? createAiQueryParser(settings);

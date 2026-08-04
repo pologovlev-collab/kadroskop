@@ -9,7 +9,7 @@ Future<void> main() async {
   final server = await startKadroskopServer(
     address: InternetAddress.anyIPv4,
     port: port,
-    tmdbToken: environment['TMDB_ACCESS_TOKEN'],
+    catalogSettings: CatalogSettings.fromEnvironment(environment),
     aiSettings: AiSettings.fromEnvironment(environment),
   );
   stdout.writeln(

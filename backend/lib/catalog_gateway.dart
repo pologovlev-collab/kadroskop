@@ -3,48 +3,155 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'catalog_provider.dart';
+import 'catalog_providers.dart';
+
+class CatalogSettings {
+  const CatalogSettings({
+    this.tmdbEnabled = true,
+    this.aniListEnabled = true,
+    this.jikanEnabled = true,
+    this.tvMazeEnabled = true,
+    this.tmdbToken,
+    this.tmdbLanguage = 'ru-RU',
+    this.tmdbRegion = 'RU',
+    this.jikanBaseUrl = 'https://api.jikan.moe/v4',
+    this.tvMazeBaseUrl = 'https://api.tvmaze.com',
+    this.aniListBaseUrl = 'https://graphql.anilist.co',
+    this.connectionTimeout = const Duration(seconds: 10),
+    this.requestTimeout = const Duration(seconds: 20),
+    this.cacheTtl = const Duration(hours: 24),
+  });
+
+  final bool tmdbEnabled;
+  final bool aniListEnabled;
+  final bool jikanEnabled;
+  final bool tvMazeEnabled;
+  final String? tmdbToken;
+  final String tmdbLanguage;
+  final String tmdbRegion;
+  final String jikanBaseUrl;
+  final String tvMazeBaseUrl;
+  final String aniListBaseUrl;
+  final Duration connectionTimeout;
+  final Duration requestTimeout;
+  final Duration cacheTtl;
+
+  factory CatalogSettings.fromEnvironment(Map<String, String> values) =>
+      CatalogSettings(
+        tmdbEnabled: _settingBool(values['TMDB_ENABLED'], fallback: true),
+        aniListEnabled: _settingBool(values['ANILIST_ENABLED'], fallback: true),
+        jikanEnabled: _settingBool(values['JIKAN_ENABLED'], fallback: true),
+        tvMazeEnabled: _settingBool(values['TVMAZE_ENABLED'], fallback: true),
+        tmdbToken: _cleanSecret(values['TMDB_ACCESS_TOKEN']),
+        tmdbLanguage: _cleanSecret(values['TMDB_LANGUAGE']) ?? 'ru-RU',
+        tmdbRegion: _cleanSecret(values['TMDB_REGION']) ?? 'RU',
+        jikanBaseUrl:
+            _cleanSecret(values['JIKAN_BASE_URL']) ??
+            'https://api.jikan.moe/v4',
+        tvMazeBaseUrl:
+            _cleanSecret(values['TVMAZE_BASE_URL']) ?? 'https://api.tvmaze.com',
+        aniListBaseUrl:
+            _cleanSecret(values['ANILIST_BASE_URL']) ??
+            'https://graphql.anilist.co',
+        connectionTimeout: Duration(
+          seconds: _settingInt(
+            values['CATALOG_CONNECTION_TIMEOUT_SECONDS'],
+            fallback: 10,
+            min: 2,
+            max: 60,
+          ),
+        ),
+        requestTimeout: Duration(
+          seconds: _settingInt(
+            values['CATALOG_REQUEST_TIMEOUT_SECONDS'],
+            fallback: 20,
+            min: 2,
+            max: 120,
+          ),
+        ),
+        cacheTtl: Duration(
+          hours: _settingInt(
+            values['CATALOG_CACHE_HOURS'],
+            fallback: 24,
+            min: 1,
+            max: 720,
+          ),
+        ),
+      );
+}
+
 class CatalogGateway {
   CatalogGateway(
     this._client, {
     String? tmdbToken,
     Duration requestTimeout = const Duration(seconds: 12),
-  }) : _tmdbToken = _cleanSecret(tmdbToken),
-       _requestTimeout = requestTimeout;
+    CatalogSettings? settings,
+  }) : _settings =
+           settings ??
+           CatalogSettings(
+             tmdbToken: tmdbToken,
+             requestTimeout: requestTimeout,
+           ),
+       _tmdbToken = _cleanSecret(settings?.tmdbToken ?? tmdbToken),
+       _requestTimeout = settings?.requestTimeout ?? requestTimeout {
+    _providers = [
+      TmdbCatalogProvider(
+        enabled: _settings.tmdbEnabled && tmdbConfigured,
+        searchCallback: _legacyTmdbSearch,
+        popularCallback: _legacyTmdbPopular,
+        discoverCallback: _legacyTmdbDiscover,
+        detailsCallback: _legacyTmdbDetails,
+      ),
+      AniListCatalogProvider(
+        enabled: _settings.aniListEnabled,
+        searchCallback: _legacyAniListSearch,
+        popularCallback: _legacyAniListPopular,
+        discoverCallback: _legacyAniListDiscover,
+        detailsCallback: _legacyAniListDetails,
+      ),
+      JikanCatalogProvider(
+        client: _client,
+        enabled: _settings.jikanEnabled,
+        baseUrl: _settings.jikanBaseUrl,
+        timeout: _requestTimeout,
+      ),
+      TvMazeCatalogProvider(
+        client: _client,
+        enabled: _settings.tvMazeEnabled,
+        baseUrl: _settings.tvMazeBaseUrl,
+        timeout: _requestTimeout,
+      ),
+    ];
+    for (final provider in _providers) {
+      _health[provider.name] = ProviderHealth(
+        provider: provider.name,
+        state: provider.enabled
+            ? ProviderState.unknown
+            : ProviderState.disabled,
+      );
+    }
+  }
 
   final http.Client _client;
+  final CatalogSettings _settings;
   final String? _tmdbToken;
   final Duration _requestTimeout;
+  late final List<CatalogProvider> _providers;
   final _cache = _MemoryCache();
-  final Map<String, ProviderHealth> _health = {
-    'tmdb': const ProviderHealth(
-      provider: 'tmdb',
-      state: ProviderState.unknown,
-    ),
-    'anilist': const ProviderHealth(
-      provider: 'anilist',
-      state: ProviderState.unknown,
-    ),
-  };
+  final Map<String, ProviderHealth> _health = {};
 
   bool get tmdbConfigured => _tmdbToken != null;
 
   Map<String, Object?> get diagnostics => {
-    'tmdb':
-        (_health['tmdb'] ??
-                const ProviderHealth(
-                  provider: 'tmdb',
-                  state: ProviderState.unknown,
-                ))
-            .copyWith(
-              state: tmdbConfigured
-                  ? _health['tmdb']!.state
-                  : ProviderState.notConfigured,
-              message: tmdbConfigured
-                  ? _health['tmdb']!.message
-                  : 'Ключ не настроен',
-            )
-            .toJson(),
-    'anilist': _health['anilist']!.toJson(),
+    for (final provider in _providers)
+      provider.name: provider.name == 'tmdb' && !tmdbConfigured
+          ? const ProviderHealth(
+              provider: 'tmdb',
+              state: ProviderState.notConfigured,
+              message: 'Ключ не настроен',
+            ).toJson()
+          : _health[provider.name]!.toJson(),
   };
 
   Future<CatalogSearchPage> search(
@@ -58,29 +165,18 @@ class CatalogGateway {
     final cached = _cache.read<CatalogSearchPage>(cacheKey);
     if (cached != null) return cached;
 
-    final includeMovies =
-        kind == null ||
-        const ['movie', 'cartoon', 'documentary'].contains(kind);
-    final includeTv =
-        kind == null || const ['series', 'animatedSeries'].contains(kind);
-    final includeAnime = kind == null || kind == 'anime';
-    final operations = <_ProviderOperation>[
-      if (tmdbConfigured && includeMovies)
-        _ProviderOperation(
-          'tmdb',
-          () => _searchTmdb(normalized, 'movie', page: safePage),
-        ),
-      if (tmdbConfigured && includeTv)
-        _ProviderOperation(
-          'tmdb',
-          () => _searchTmdb(normalized, 'tv', page: safePage),
-        ),
-      if (includeAnime)
-        _ProviderOperation(
-          'anilist',
-          () => _searchAniList(normalized, page: safePage),
-        ),
-    ];
+    final request = CatalogProviderRequest(
+      query: normalized,
+      kind: kind,
+      page: safePage,
+    );
+    final operations = _providers
+        .where((provider) => provider.enabled && provider.supportsKind(kind))
+        .map(
+          (provider) =>
+              _ProviderOperation(provider.name, () => provider.search(request)),
+        )
+        .toList();
 
     if (operations.isEmpty) {
       throw CatalogException(
@@ -89,7 +185,7 @@ class CatalogGateway {
       );
     }
     final value = await _runOperations(operations, kind: kind, page: safePage);
-    _cache.write(cacheKey, value);
+    _cache.write(cacheKey, value, ttl: _settings.cacheTtl);
     return value;
   }
 
@@ -99,20 +195,16 @@ class CatalogGateway {
     final cached = _cache.read<CatalogSearchPage>(cacheKey);
     if (cached != null) return cached;
 
-    final includeMovies =
-        kind == null ||
-        const ['movie', 'cartoon', 'documentary'].contains(kind);
-    final includeTv =
-        kind == null || const ['series', 'animatedSeries'].contains(kind);
-    final includeAnime = kind == null || kind == 'anime';
-    final operations = <_ProviderOperation>[
-      if (tmdbConfigured && includeMovies)
-        _ProviderOperation('tmdb', () => _popularTmdb('movie', page: safePage)),
-      if (tmdbConfigured && includeTv)
-        _ProviderOperation('tmdb', () => _popularTmdb('tv', page: safePage)),
-      if (includeAnime)
-        _ProviderOperation('anilist', () => _popularAniList(page: safePage)),
-    ];
+    final request = CatalogProviderRequest(kind: kind, page: safePage);
+    final operations = _providers
+        .where((provider) => provider.enabled && provider.supportsKind(kind))
+        .map(
+          (provider) => _ProviderOperation(
+            provider.name,
+            () => provider.popular(request),
+          ),
+        )
+        .toList();
     if (operations.isEmpty) {
       throw CatalogException(
         'Для этого типа нужен TMDB_ACCESS_TOKEN в backend/.env.',
@@ -120,7 +212,7 @@ class CatalogGateway {
       );
     }
     final value = await _runOperations(operations, kind: kind, page: safePage);
-    _cache.write(cacheKey, value, ttl: const Duration(minutes: 30));
+    _cache.write(cacheKey, value, ttl: _settings.cacheTtl);
     return value;
   }
 
@@ -134,61 +226,28 @@ class CatalogGateway {
     int page = 1,
   }) async {
     final safePage = _safePage(page);
-    final types = workTypes.toSet();
-    final includeEverything = types.isEmpty;
-    final includeMovies =
-        includeEverything ||
-        types.any(const {'movie', 'cartoon', 'documentary'}.contains);
-    final includeTv =
-        includeEverything ||
-        types.any(const {'series', 'animated_series'}.contains);
-    // AniList is also a useful verified fallback for animated works. This is
-    // especially important when TMDB is temporarily unreachable: a request
-    // explicitly narrowed to an animated series must not become TMDB-only.
-    final includeAnime =
-        includeEverything ||
-        types.any(const {'anime', 'animated_series', 'cartoon'}.contains);
-    final operations = <_ProviderOperation>[
-      if (tmdbConfigured && includeMovies)
-        _ProviderOperation(
-          'tmdb',
-          () => _discoverTmdb(
-            'movie',
-            workTypes: workTypes,
-            yearFrom: yearFrom,
-            yearTo: yearTo,
-            genres: genres,
-            plotKeywords: plotKeywords,
-            countries: countries,
-            page: safePage,
+    final request = CatalogProviderRequest(
+      page: safePage,
+      yearFrom: yearFrom,
+      yearTo: yearTo,
+      genres: genres,
+      plotKeywords: plotKeywords,
+      countries: countries,
+      workTypes: workTypes,
+    );
+    final operations = _providers
+        .where(
+          (provider) =>
+              provider.enabled &&
+              _providerMatchesWorkTypes(provider.name, workTypes),
+        )
+        .map(
+          (provider) => _ProviderOperation(
+            provider.name,
+            () => provider.discover(request),
           ),
-        ),
-      if (tmdbConfigured && includeTv)
-        _ProviderOperation(
-          'tmdb',
-          () => _discoverTmdb(
-            'tv',
-            workTypes: workTypes,
-            yearFrom: yearFrom,
-            yearTo: yearTo,
-            genres: genres,
-            plotKeywords: plotKeywords,
-            countries: countries,
-            page: safePage,
-          ),
-        ),
-      if (includeAnime)
-        _ProviderOperation(
-          'anilist',
-          () => _discoverAniList(
-            yearFrom: yearFrom,
-            yearTo: yearTo,
-            genres: genres,
-            countries: countries,
-            page: safePage,
-          ),
-        ),
-    ];
+        )
+        .toList();
     if (operations.isEmpty) {
       throw CatalogException(
         'Для выбранных типов нужен TMDB_ACCESS_TOKEN в backend/.env.',
@@ -217,20 +276,29 @@ class CatalogGateway {
     final combined =
         successes
             .expand((result) => result.items)
-            .where((item) => kind == null || item['kind'] == kind)
+            .where((item) => kind == null || item.kind == kind)
             .toList()
-          ..sort(
-            (a, b) => ((b['popularity'] as num?) ?? 0).compareTo(
-              (a['popularity'] as num?) ?? 0,
-            ),
-          );
-    final deduplicated = <String, Map<String, Object?>>{};
-    for (final item in combined) {
-      final key = _deduplicationKey(item);
-      deduplicated.putIfAbsent(key, () => item);
+          ..sort((a, b) => b.popularity.compareTo(a.popularity));
+    final deduplicated = <CatalogMedia>[];
+    for (final candidate in combined) {
+      final matchIndex = deduplicated.indexWhere(
+        (existing) => _dedupeConfidence(existing, candidate) != null,
+      );
+      if (matchIndex < 0) {
+        deduplicated.add(candidate);
+        continue;
+      }
+      final confidence = _dedupeConfidence(
+        deduplicated[matchIndex],
+        candidate,
+      )!;
+      deduplicated[matchIndex] = deduplicated[matchIndex].merge(
+        candidate,
+        confidence: confidence,
+      );
     }
     return CatalogSearchPage(
-      results: deduplicated.values.take(40).toList(),
+      results: deduplicated.take(40).map((item) => item.toJson()).toList(),
       page: page,
       hasMore: successes.any((result) => result.items.length >= 20),
       warnings: failures.map((failure) => failure.error!).toSet().toList(),
@@ -247,6 +315,9 @@ class CatalogGateway {
         checkedAt: DateTime.now(),
       );
       return _SettledOperation(items: items);
+    } on CatalogProviderException catch (error) {
+      _recordFailure(operation.provider, error.userMessage);
+      return _SettledOperation(error: error.userMessage);
     } on CatalogException catch (error) {
       _recordFailure(operation.provider, error.message);
       return _SettledOperation(error: error.message);
@@ -281,15 +352,123 @@ class CatalogGateway {
     final cacheKey = 'details:$source:$id';
     final cached = _cache.read<Map<String, Object?>>(cacheKey);
     if (cached != null) return cached;
-    final result = switch (source) {
-      'tmdb_movie' => await _tmdbDetails(id, isTv: false),
-      'tmdb_tv' => await _tmdbDetails(id, isTv: true),
-      'anilist' => await _aniListDetails(id),
-      _ => throw CatalogException('Неизвестный источник: $source', 400),
-    };
-    _cache.write(cacheKey, result);
+    final provider = _providers
+        .where((candidate) => candidate.supportsSource(source))
+        .firstOrNull;
+    if (provider == null) {
+      throw CatalogException('Неизвестный источник: $source', 400);
+    }
+    if (!provider.enabled) {
+      throw CatalogException(
+        '${_providerLabel(provider.name)} не настроен или отключён.',
+        503,
+      );
+    }
+    late final Map<String, Object?> result;
+    try {
+      result = (await provider.details(source, id)).toJson();
+      _health[provider.name] = ProviderHealth(
+        provider: provider.name,
+        state: ProviderState.connected,
+        checkedAt: DateTime.now(),
+      );
+    } on CatalogProviderException catch (error) {
+      _recordFailure(provider.name, error.userMessage);
+      throw CatalogException(error.userMessage, error.statusCode);
+    }
+    _cache.write(cacheKey, result, ttl: _settings.cacheTtl);
     return result;
   }
+
+  Future<List<Map<String, Object?>>> _legacyTmdbSearch(
+    CatalogProviderRequest request,
+  ) async {
+    final types = <String>[
+      if (request.kind == null ||
+          const {'movie', 'cartoon', 'documentary'}.contains(request.kind))
+        'movie',
+      if (request.kind == null ||
+          const {'series', 'animatedSeries'}.contains(request.kind))
+        'tv',
+    ];
+    final pages = await Future.wait(
+      types.map((type) => _searchTmdb(request.query, type, page: request.page)),
+    );
+    return pages.expand((items) => items).toList();
+  }
+
+  Future<List<Map<String, Object?>>> _legacyTmdbPopular(
+    CatalogProviderRequest request,
+  ) async {
+    final types = <String>[
+      if (request.kind == null ||
+          const {'movie', 'cartoon', 'documentary'}.contains(request.kind))
+        'movie',
+      if (request.kind == null ||
+          const {'series', 'animatedSeries'}.contains(request.kind))
+        'tv',
+    ];
+    final pages = await Future.wait(
+      types.map((type) => _popularTmdb(type, page: request.page)),
+    );
+    return pages.expand((items) => items).toList();
+  }
+
+  Future<List<Map<String, Object?>>> _legacyTmdbDiscover(
+    CatalogProviderRequest request,
+  ) async {
+    final types = request.workTypes.toSet();
+    final includeEverything = types.isEmpty;
+    final mediaTypes = <String>[
+      if (includeEverything ||
+          types.any(const {'movie', 'cartoon', 'documentary'}.contains))
+        'movie',
+      if (includeEverything ||
+          types.any(const {'series', 'animated_series'}.contains))
+        'tv',
+    ];
+    final pages = await Future.wait(
+      mediaTypes.map(
+        (type) => _discoverTmdb(
+          type,
+          workTypes: request.workTypes,
+          yearFrom: request.yearFrom,
+          yearTo: request.yearTo,
+          genres: request.genres,
+          plotKeywords: request.plotKeywords,
+          countries: request.countries,
+          page: request.page,
+        ),
+      ),
+    );
+    return pages.expand((items) => items).toList();
+  }
+
+  Future<Map<String, Object?>> _legacyTmdbDetails(String source, String id) =>
+      _tmdbDetails(id, isTv: source == 'tmdb_tv');
+
+  Future<List<Map<String, Object?>>> _legacyAniListSearch(
+    CatalogProviderRequest request,
+  ) => _searchAniList(request.query, page: request.page);
+
+  Future<List<Map<String, Object?>>> _legacyAniListPopular(
+    CatalogProviderRequest request,
+  ) => _popularAniList(page: request.page);
+
+  Future<List<Map<String, Object?>>> _legacyAniListDiscover(
+    CatalogProviderRequest request,
+  ) => _discoverAniList(
+    yearFrom: request.yearFrom,
+    yearTo: request.yearTo,
+    genres: request.genres,
+    countries: request.countries,
+    page: request.page,
+  );
+
+  Future<Map<String, Object?>> _legacyAniListDetails(
+    String source,
+    String id,
+  ) => _aniListDetails(id);
 
   Future<List<Map<String, Object?>>> _searchTmdb(
     String query,
@@ -298,7 +477,8 @@ class CatalogGateway {
   }) async {
     final uri = Uri.https('api.themoviedb.org', '/3/search/$type', {
       'query': query,
-      'language': 'ru-RU',
+      'language': _settings.tmdbLanguage,
+      'region': _settings.tmdbRegion,
       'include_adult': 'false',
       'page': '$page',
     });
@@ -310,7 +490,8 @@ class CatalogGateway {
     required int page,
   }) async {
     final uri = Uri.https('api.themoviedb.org', '/3/trending/$type/week', {
-      'language': 'ru-RU',
+      'language': _settings.tmdbLanguage,
+      'region': _settings.tmdbRegion,
       'page': '$page',
     });
     return _mapTmdbResults(await _getTmdb(uri), type);
@@ -342,7 +523,8 @@ class CatalogGateway {
         .toSet();
     final dateField = type == 'tv' ? 'first_air_date' : 'primary_release_date';
     final parameters = <String, String>{
-      'language': 'ru-RU',
+      'language': _settings.tmdbLanguage,
+      'region': _settings.tmdbRegion,
       'include_adult': 'false',
       'sort_by': 'popularity.desc',
       'page': '$page',
@@ -410,7 +592,7 @@ class CatalogGateway {
     }
     final type = isTv ? 'tv' : 'movie';
     final uri = Uri.https('api.themoviedb.org', '/3/$type/$id', {
-      'language': 'ru-RU',
+      'language': _settings.tmdbLanguage,
     });
     final row = await _getTmdb(uri);
     final result = _mapTmdb(row, type);
@@ -494,9 +676,13 @@ class CatalogGateway {
       'id': (isTv ? 2000000000 : 1000000000) + externalId,
       'source': 'tmdb_$type',
       'externalId': '$externalId',
+      'externalIds': {'tmdb': '$externalId'},
       'title': title,
       'subtitle':
           (row['original_name'] ?? row['original_title'] ?? '') as String,
+      'originalTitle':
+          (row['original_name'] ?? row['original_title'] ?? '') as String,
+      'synonyms': const <String>[],
       'description': (row['overview'] as String?) ?? '',
       'year': date.length >= 4 ? int.tryParse(date.substring(0, 4)) ?? 0 : 0,
       'kind': kind,
@@ -505,16 +691,27 @@ class CatalogGateway {
       'posterUrl': posterPath == null
           ? null
           : 'https://image.tmdb.org/t/p/w500$posterPath',
+      'backdropUrl': row['backdrop_path'] == null
+          ? null
+          : 'https://image.tmdb.org/t/p/w1280${row['backdrop_path']}',
       'runtimeMinutes': 0,
       'seasonCount': 0,
       'episodeCount': 0,
       'episodeRuntimeMinutes': isTv ? 45 : 0,
       'seasons': const [],
       'popularity': ((row['popularity'] as num?) ?? 0).toDouble(),
+      'voteCount': ((row['vote_count'] as num?) ?? 0).toInt(),
       'originCountries': (row['origin_country'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .toList(),
       'originalLanguage': row['original_language'] as String?,
+      'format': isTv ? 'TV' : 'MOVIE',
+      'keywords': const <String>[],
+      'characters': const <Map<String, Object?>>[],
+      'cast': const <Map<String, Object?>>[],
+      'studios': const <String>[],
+      'relations': const <Map<String, Object?>>[],
+      'sourceUrls': ['https://www.themoviedb.org/$type/$externalId'],
     };
   }
 
@@ -587,7 +784,7 @@ class CatalogGateway {
   ) async {
     final response = await _client
         .post(
-          Uri.parse('https://graphql.anilist.co'),
+          Uri.parse(_settings.aniListBaseUrl),
           headers: const {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -608,7 +805,9 @@ class CatalogGateway {
     final title = row['title'] as Map<String, dynamic>? ?? const {};
     final cover = row['coverImage'] as Map<String, dynamic>? ?? const {};
     final startDate = row['startDate'] as Map<String, dynamic>? ?? const {};
+    final endDate = row['endDate'] as Map<String, dynamic>? ?? const {};
     final externalId = (row['id'] as num).toInt();
+    final malId = (row['idMal'] as num?)?.toInt();
     final episodes = ((row['episodes'] as num?) ?? 0).toInt();
     final duration = ((row['duration'] as num?) ?? 0).toInt();
     final format = row['format'] as String?;
@@ -616,26 +815,34 @@ class CatalogGateway {
       'id': 3000000000 + externalId,
       'source': 'anilist',
       'externalId': '$externalId',
+      'externalIds': {
+        'anilist': '$externalId',
+        if (malId != null) 'mal': '$malId',
+      },
       'title':
           (title['english'] ?? title['romaji'] ?? title['native']) as String,
       'subtitle': (title['romaji'] ?? title['native'] ?? '') as String,
+      'originalTitle': (title['romaji'] ?? title['native'] ?? '') as String,
+      'englishTitle': (title['english'] ?? '') as String,
+      'nativeTitle': (title['native'] ?? '') as String,
+      'synonyms': (row['synonyms'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
       'description': _stripHtml((row['description'] as String?) ?? ''),
       'year': ((startDate['year'] as num?) ?? 0).toInt(),
+      'endYear': (endDate['year'] as num?)?.toInt(),
       'kind': 'anime',
       'rating': (((row['averageScore'] as num?) ?? 0) / 10).toDouble(),
       'genres': (row['genres'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .toList(),
       'posterUrl': (cover['extraLarge'] ?? cover['large']) as String?,
+      'backdropUrl': row['bannerImage'] as String?,
       'runtimeMinutes': format == 'MOVIE' ? duration : 0,
-      'seasonCount': episodes > 0 ? 1 : 0,
+      'seasonCount': 0,
       'episodeCount': episodes,
       'episodeRuntimeMinutes': duration,
-      'seasons': episodes > 0
-          ? [
-              {'number': 1, 'episodeCount': episodes, 'name': 'Сезон 1'},
-            ]
-          : const [],
+      'seasons': const <Map<String, Object?>>[],
       'popularity': ((row['popularity'] as num?) ?? 0).toDouble(),
       'originCountries': [
         if (row['countryOfOrigin'] case final String country) country,
@@ -648,6 +855,38 @@ class CatalogGateway {
           .whereType<String>()
           .take(12)
           .toList(),
+      'keywords': const <String>[],
+      'voteCount': 0,
+      'characters': const <Map<String, Object?>>[],
+      'cast': const <Map<String, Object?>>[],
+      'studios':
+          ((row['studios'] as Map?)?['nodes'] as List<dynamic>? ?? const [])
+              .whereType<Map>()
+              .map((studio) => studio['name'])
+              .whereType<String>()
+              .toList(),
+      'relations':
+          ((row['relations'] as Map?)?['edges'] as List<dynamic>? ?? const [])
+              .whereType<Map>()
+              .map((edge) {
+                final node = edge['node'] as Map? ?? const {};
+                final relationTitle = node['title'] as Map? ?? const {};
+                return <String, Object?>{
+                  'relationType': edge['relationType'],
+                  'source': 'anilist',
+                  'sourceId': '${node['id'] ?? ''}',
+                  'title': relationTitle['english'] ?? relationTitle['romaji'],
+                  'format': node['format'],
+                };
+              })
+              .toList(),
+      'sourceUrls': {
+        if (row['siteUrl'] is String) row['siteUrl'] as String,
+        ...((row['externalLinks'] as List<dynamic>? ?? const [])
+            .whereType<Map>()
+            .map((link) => link['url'])
+            .whereType<String>()),
+      }.toList(),
     };
   }
 }
@@ -677,7 +916,7 @@ class CatalogSearchPage {
   };
 }
 
-enum ProviderState { unknown, connected, notConfigured, error }
+enum ProviderState { unknown, connected, notConfigured, disabled, error }
 
 class ProviderHealth {
   const ProviderHealth({
@@ -720,12 +959,12 @@ class CatalogException implements Exception {
 class _ProviderOperation {
   const _ProviderOperation(this.provider, this.run);
   final String provider;
-  final Future<List<Map<String, Object?>>> Function() run;
+  final Future<List<CatalogMedia>> Function() run;
 }
 
 class _SettledOperation {
   const _SettledOperation({this.items = const [], this.error});
-  final List<Map<String, Object?>> items;
+  final List<CatalogMedia> items;
   final String? error;
 }
 
@@ -767,22 +1006,90 @@ String _normalizeQuery(String value) =>
 
 int _safePage(int value) => value < 1 ? 1 : (value > 50 ? 50 : value);
 
-String _deduplicationKey(Map<String, Object?> item) {
-  final title = (item['title'] as String? ?? '').toLowerCase().replaceAll(
-    RegExp(r'[^a-zа-яё0-9]+', caseSensitive: false),
-    '',
-  );
-  return '$title:${item['year']}';
+bool _providerMatchesWorkTypes(String provider, List<String> workTypes) {
+  if (workTypes.isEmpty) return true;
+  final types = workTypes.toSet();
+  return switch (provider) {
+    'tmdb' => types.any(
+      const {
+        'movie',
+        'series',
+        'cartoon',
+        'animated_series',
+        'documentary',
+      }.contains,
+    ),
+    'anilist' || 'jikan' => types.any(
+      const {'anime', 'cartoon', 'animated_series'}.contains,
+    ),
+    'tvmaze' => types.any(const {'series', 'animated_series'}.contains),
+    _ => false,
+  };
 }
+
+double? _dedupeConfidence(CatalogMedia first, CatalogMedia second) {
+  if (first.source == second.source && first.externalId == second.externalId) {
+    return 1;
+  }
+  for (final key in first.externalIds.keys) {
+    final left = first.externalIds[key];
+    final right = second.externalIds[key];
+    if (left != null && left.isNotEmpty && left == right) return .99;
+  }
+  if (!_compatibleFormats(first.format, second.format)) return null;
+  if (first.year > 0 &&
+      second.year > 0 &&
+      (first.year - second.year).abs() > 1) {
+    return null;
+  }
+  final firstTitles = first.titleVariants.map(_normalizedTitle).toSet()
+    ..remove('');
+  final secondTitles = second.titleVariants.map(_normalizedTitle).toSet()
+    ..remove('');
+  if (firstTitles.intersection(secondTitles).isEmpty) return null;
+  return first.year == second.year ? .9 : .84;
+}
+
+bool _compatibleFormats(String? first, String? second) {
+  if (first == null || second == null || first.isEmpty || second.isEmpty) {
+    return true;
+  }
+  final left = first.toUpperCase();
+  final right = second.toUpperCase();
+  final leftMovie = left.contains('MOVIE') || left.contains('FILM');
+  final rightMovie = right.contains('MOVIE') || right.contains('FILM');
+  return leftMovie == rightMovie;
+}
+
+String _normalizedTitle(String value) => value
+    .toLowerCase()
+    .replaceAll('ё', 'е')
+    .replaceAll(RegExp(r'[^a-zа-я0-9]+', caseSensitive: false), '');
 
 String? _cleanSecret(String? value) {
   final cleaned = value?.trim();
   return cleaned == null || cleaned.isEmpty ? null : cleaned;
 }
 
+bool _settingBool(String? value, {required bool fallback}) =>
+    switch (value?.trim().toLowerCase()) {
+      'true' || '1' || 'yes' => true,
+      'false' || '0' || 'no' => false,
+      _ => fallback,
+    };
+
+int _settingInt(
+  String? value, {
+  required int fallback,
+  required int min,
+  required int max,
+}) => (int.tryParse(value ?? '') ?? fallback).clamp(min, max);
+
 String _providerLabel(String provider) => switch (provider) {
   'tmdb' => 'TMDB',
   'anilist' => 'AniList',
+  'jikan' => 'Jikan',
+  'tvmaze' => 'TVmaze',
   _ => provider,
 };
 
@@ -871,9 +1178,12 @@ const _countryCodes = <String, String>{
 
 const _aniListFields = r'''
   id
+  idMal
   title { romaji english native }
+  synonyms
   description(asHtml: false)
   startDate { year }
+  endDate { year }
   countryOfOrigin
   format
   episodes
@@ -883,6 +1193,16 @@ const _aniListFields = r'''
   genres
   tags { name rank }
   coverImage { large extraLarge }
+  bannerImage
+  siteUrl
+  studios(isMain: true) { nodes { name } }
+  relations {
+    edges {
+      relationType(version: 2)
+      node { id type format title { romaji english native } }
+    }
+  }
+  externalLinks { site url }
 ''';
 
 const _aniListSearchQuery =

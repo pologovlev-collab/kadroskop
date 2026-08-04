@@ -7,6 +7,11 @@ import 'package:kadroskop_backend/kadroskop_server.dart';
 import 'package:test/test.dart';
 
 void main() {
+  const legacyProviders = CatalogSettings(
+    jikanEnabled: false,
+    tvMazeEnabled: false,
+  );
+
   test('health endpoint reports provider configuration', () async {
     final server = await startKadroskopServer(
       address: InternetAddress.loopbackIPv4,
@@ -28,6 +33,8 @@ void main() {
       'notConfigured',
     );
     expect((providers['anilist'] as Map<String, dynamic>)['status'], 'unknown');
+    expect((providers['jikan'] as Map<String, dynamic>)['status'], 'unknown');
+    expect((providers['tvmaze'] as Map<String, dynamic>)['status'], 'unknown');
   });
 
   test('AniList results survive a TMDB connection failure', () async {
@@ -70,6 +77,7 @@ void main() {
       client,
       tmdbToken: 'configured-token',
       requestTimeout: const Duration(milliseconds: 100),
+      settings: legacyProviders,
     );
 
     final result = await gateway.search('black clover');
@@ -124,7 +132,11 @@ void main() {
       }
       return http.Response('not found', 404);
     });
-    final gateway = CatalogGateway(client, tmdbToken: 'configured');
+    final gateway = CatalogGateway(
+      client,
+      tmdbToken: 'configured',
+      settings: legacyProviders,
+    );
 
     final page = await gateway.discover(
       workTypes: const ['animated_series'],
@@ -151,6 +163,7 @@ void main() {
         }),
         tmdbToken: 'configured-token',
         requestTimeout: const Duration(milliseconds: 100),
+        settings: legacyProviders,
       );
 
       await expectLater(
@@ -201,6 +214,7 @@ void main() {
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
       }),
+      settings: legacyProviders,
     );
     final parser = createAiQueryParser(
       AiSettings.fromEnvironment(const {'AI_PROVIDER': 'none'}),
