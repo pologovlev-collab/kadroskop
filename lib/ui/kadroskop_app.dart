@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../data/media_repository.dart';
+import '../data/episode_range_parser.dart';
 import '../models/app_profile.dart';
 import '../models/media_item.dart';
 import '../models/recommendation.dart';
@@ -2554,6 +2555,9 @@ class _EpisodeSelector extends StatefulWidget {
 
 class _EpisodeSelectorState extends State<_EpisodeSelector> {
   final watched = <String>{};
+  final rangeFrom = TextEditingController();
+  final rangeTo = TextEditingController();
+  final rangeExpression = TextEditingController();
   bool loading = true;
 
   @override
@@ -2561,6 +2565,18 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
     super.initState();
     _load();
   }
+
+  @override
+  void dispose() {
+    rangeFrom.dispose();
+    rangeTo.dispose();
+    rangeExpression.dispose();
+    super.dispose();
+  }
+
+  int get totalEpisodes => widget.item.seasons.isNotEmpty
+      ? widget.item.seasons.fold(0, (sum, season) => sum + season.episodeCount)
+      : widget.item.episodeCount;
 
   Future<void> _load() async {
     final values = await widget.repository.loadEpisodeProgress(widget.item.id);
@@ -2607,6 +2623,87 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
     }
   }
 
+  Future<void> _applyRange(bool value, {bool fromStart = false}) async {
+    try {
+      final expression = fromStart
+          ? '1-${rangeTo.text.trim()}'
+          : rangeExpression.text.trim().isNotEmpty
+          ? rangeExpression.text.trim()
+          : '${rangeFrom.text.trim()}-${rangeTo.text.trim()}';
+      final episodes = const EpisodeRangeParser().parse(
+        expression,
+        totalEpisodes: totalEpisodes,
+      );
+      final count = await widget.repository.setEpisodeRange(
+        widget.item,
+        episodes,
+        value,
+      );
+      await _load();
+      await widget.onChanged();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            value ? 'Отмечено $count эпизодов' : 'Снято $count отметок',
+          ),
+        ),
+      );
+    } on EpisodeRangeException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Не удалось сохранить: $error')));
+    }
+  }
+
+  Future<void> _watchAll() async {
+    await widget.repository.setAllEpisodesWatched(widget.item, true);
+    await _load();
+    await widget.onChanged();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Отмечено $totalEpisodes эпизодов')),
+      );
+    }
+  }
+
+  Future<void> _clearAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Снять все отметки?'),
+        content: const Text(
+          'Все просмотренные эпизоды этого произведения будут сняты.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Снять все отметки'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await widget.repository.setAllEpisodesWatched(widget.item, false);
+    await _load();
+    await widget.onChanged();
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Все отметки сняты')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final seasons = widget.item.seasons;
@@ -2647,6 +2744,17 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
             style: TextStyle(color: AppColors.muted, fontSize: 12),
           ),
           const SizedBox(height: 14),
+          _EpisodeRangeControls(
+            from: rangeFrom,
+            to: rangeTo,
+            expression: rangeExpression,
+            onMark: () => _applyRange(true),
+            onUnmark: () => _applyRange(false),
+            onMarkTo: () => _applyRange(true, fromStart: true),
+            onWatchAll: _watchAll,
+            onClearAll: _clearAll,
+          ),
+          const SizedBox(height: 16),
           if (loading)
             const LinearProgressIndicator(minHeight: 3)
           else if (seasons.isEmpty && widget.item.episodeCount > 0) ...[
@@ -2720,4 +2828,120 @@ class _EpisodeSelectorState extends State<_EpisodeSelector> {
       ),
     );
   }
+}
+
+class _EpisodeRangeControls extends StatelessWidget {
+  const _EpisodeRangeControls({
+    required this.from,
+    required this.to,
+    required this.expression,
+    required this.onMark,
+    required this.onUnmark,
+    required this.onMarkTo,
+    required this.onWatchAll,
+    required this.onClearAll,
+  });
+
+  final TextEditingController from;
+  final TextEditingController to;
+  final TextEditingController expression;
+  final VoidCallback onMark;
+  final VoidCallback onUnmark;
+  final VoidCallback onMarkTo;
+  final VoidCallback onWatchAll;
+  final VoidCallback onClearAll;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppColors.accent.withValues(alpha: .05),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: AppColors.accent.withValues(alpha: .16)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Отметить диапазон эпизодов',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 5),
+        const Text(
+          'Используйте поля «От/До» или запись: 1-25, 30, 35-40.',
+          style: TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 560;
+            final bounds = Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: from,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'От'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: to,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'До'),
+                  ),
+                ),
+              ],
+            );
+            final freeform = TextField(
+              controller: expression,
+              decoration: const InputDecoration(
+                labelText: 'Несколько диапазонов',
+                hintText: '1-25, 30, 35-40',
+              ),
+            );
+            return compact
+                ? Column(
+                    children: [bounds, const SizedBox(height: 10), freeform],
+                  )
+                : Row(
+                    children: [
+                      SizedBox(width: 190, child: bounds),
+                      const SizedBox(width: 10),
+                      Expanded(child: freeform),
+                    ],
+                  );
+          },
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              onPressed: onMark,
+              icon: const Icon(Icons.done_all_rounded),
+              label: const Text('Отметить просмотренными'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onUnmark,
+              icon: const Icon(Icons.remove_done_rounded),
+              label: const Text('Снять отметки'),
+            ),
+            TextButton(
+              onPressed: onMarkTo,
+              child: const Text('Отметить до выбранного'),
+            ),
+            TextButton(onPressed: onWatchAll, child: const Text('Смотрел всё')),
+            TextButton(
+              onPressed: onClearAll,
+              child: const Text('Снять все отметки'),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
 }

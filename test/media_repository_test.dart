@@ -170,6 +170,55 @@ void main() {
       expect(saved.status, WatchStatus.planned);
     },
   );
+
+  test('episode range maps ordinals across real seasons', () async {
+    final repository = MemoryMediaRepository([series]);
+
+    expect(await repository.setEpisodeRange(series, [1, 2, 3], true), 3);
+    var progress = await repository.loadEpisodeProgress(series.id);
+    expect(
+      progress
+          .map((episode) => (episode.seasonNumber, episode.episodeNumber))
+          .toSet(),
+      {(1, 1), (1, 2), (2, 1)},
+    );
+    var saved = (await repository.loadMedia()).single;
+    expect(saved.watchedEpisodeCount, 3);
+    expect(saved.watchedMinutes, 135);
+    expect(saved.status, WatchStatus.watching);
+
+    expect(await repository.setEpisodeRange(saved, [2, 3], false), 2);
+    progress = await repository.loadEpisodeProgress(series.id);
+    expect(progress, hasLength(1));
+    saved = (await repository.loadMedia()).single;
+    expect(saved.watchedEpisodeCount, 1);
+    expect(saved.watchedMinutes, 45);
+  });
+
+  test('episode range rolls back rows and summary together', () async {
+    final database = await LocalDatabase.openInMemoryForTesting();
+    addTearDown(database.database.close);
+    final repository = LocalMediaRepository(database);
+    await repository.setStatus(series, WatchStatus.planned);
+    await database.database.execute('''
+      CREATE TRIGGER reject_range_progress_update
+      BEFORE UPDATE OF watched_episode_count ON user_media
+      WHEN NEW.watched_episode_count > 0
+      BEGIN
+        SELECT RAISE(ABORT, 'test rollback');
+      END
+    ''');
+
+    await expectLater(
+      repository.setEpisodeRange(series, [1, 2, 3], true),
+      throwsA(anything),
+    );
+
+    expect(await repository.loadEpisodeProgress(series.id), isEmpty);
+    final saved = (await repository.loadMedia()).single;
+    expect(saved.watchedEpisodeCount, 0);
+    expect(saved.status, WatchStatus.planned);
+  });
 }
 
 const series = MediaItem(

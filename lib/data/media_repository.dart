@@ -84,6 +84,11 @@ abstract interface class MediaRepository {
     bool watched,
   );
   Future<void> setAllEpisodesWatched(MediaItem item, bool watched);
+  Future<int> setEpisodeRange(
+    MediaItem item,
+    Iterable<int> episodeNumbers,
+    bool watched,
+  );
   Future<void> recordInteraction(MediaItem item, String eventType);
 }
 
@@ -734,6 +739,9 @@ class LocalMediaRepository implements MediaRepository {
 
   @override
   Future<void> setAllEpisodesWatched(MediaItem item, bool watched) async {
+    if (watched && _totalEpisodeCapacity(item) < 1) {
+      throw StateError('Каталог не сообщил количество эпизодов.');
+    }
     await _local.database.transaction((transaction) async {
       await _saveMediaWith(transaction, item);
       final now = DateTime.now().toIso8601String();
@@ -767,6 +775,53 @@ class LocalMediaRepository implements MediaRepository {
         'created_at': now,
       });
     });
+  }
+
+  @override
+  Future<int> setEpisodeRange(
+    MediaItem item,
+    Iterable<int> episodeNumbers,
+    bool watched,
+  ) async {
+    final total = _totalEpisodeCapacity(item);
+    final numbers = episodeNumbers.toSet().toList()..sort();
+    if (numbers.isEmpty) return 0;
+    if (numbers.first < 1 || numbers.last > total) {
+      throw RangeError('Диапазон выходит за пределы 1–$total.');
+    }
+    await _local.database.transaction((transaction) async {
+      await _saveMediaWith(transaction, item);
+      final now = DateTime.now().toIso8601String();
+      final batch = transaction.batch();
+      for (final number in numbers) {
+        final coordinate = _episodeCoordinate(item, number);
+        if (watched) {
+          batch.insert('episode_progress', {
+            'media_id': item.id,
+            'season_number': coordinate.$1,
+            'episode_number': coordinate.$2,
+            'watched': 1,
+            'watched_at': now,
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
+        } else {
+          batch.delete(
+            'episode_progress',
+            where: 'media_id = ? AND season_number = ? AND episode_number = ?',
+            whereArgs: [item.id, coordinate.$1, coordinate.$2],
+          );
+        }
+      }
+      await batch.commit(noResult: true);
+      await _reconcileItemProgress(transaction, item, now: now);
+      await transaction.insert('interactions', {
+        'media_id': item.id,
+        'event_type': watched
+            ? 'episodes_range_watched'
+            : 'episodes_range_unwatched',
+        'created_at': now,
+      });
+    });
+    return numbers.length;
   }
 
   void _validateEpisode(MediaItem item, int seasonNumber, int episodeNumber) {
@@ -816,9 +871,10 @@ class LocalMediaRepository implements MediaRepository {
             (value) => value.name == currentRows.first['status'],
             orElse: () => item.status,
           );
+    final totalEpisodes = _totalEpisodeCapacity(item);
     final status =
         forceStatus ??
-        (watchedCount >= item.episodeCount && item.episodeCount > 0
+        (watchedCount >= totalEpisodes && totalEpisodes > 0
             ? WatchStatus.watched
             : watchedCount > 0
             ? current == WatchStatus.dropped
@@ -1140,6 +1196,9 @@ class MemoryMediaRepository implements MediaRepository {
 
   @override
   Future<void> setAllEpisodesWatched(MediaItem item, bool watched) async {
+    if (watched && _totalEpisodeCapacity(item) < 1) {
+      throw StateError('Каталог не сообщил количество эпизодов.');
+    }
     _episodeProgress[item.id] = watched
         ? [
             for (final coordinate in _episodeCoordinates(item))
@@ -1167,6 +1226,69 @@ class MemoryMediaRepository implements MediaRepository {
         )
         .toList();
   }
+
+  @override
+  Future<int> setEpisodeRange(
+    MediaItem item,
+    Iterable<int> episodeNumbers,
+    bool watched,
+  ) async {
+    final numbers = episodeNumbers.toSet().toList()..sort();
+    final total = _totalEpisodeCapacity(item);
+    if (numbers.isEmpty) return 0;
+    if (numbers.first < 1 || numbers.last > total) {
+      throw RangeError('Диапазон выходит за пределы 1–$total.');
+    }
+    final values = <EpisodeProgress>[
+      ...(_episodeProgress[item.id] ?? const <EpisodeProgress>[]),
+    ];
+    final coordinates = numbers.map(
+      (number) => _episodeCoordinate(item, number),
+    );
+    for (final coordinate in coordinates) {
+      values.removeWhere(
+        (value) =>
+            value.seasonNumber == coordinate.$1 &&
+            value.episodeNumber == coordinate.$2,
+      );
+      if (watched) {
+        values.add(
+          EpisodeProgress(
+            seasonNumber: coordinate.$1,
+            episodeNumber: coordinate.$2,
+            watched: true,
+          ),
+        );
+      }
+    }
+    _episodeProgress[item.id] = values;
+    final current = items.firstWhere(
+      (candidate) => candidate.id == item.id,
+      orElse: () => item,
+    );
+    final count = values.length;
+    final status = count >= total
+        ? WatchStatus.watched
+        : count > 0
+        ? current.status == WatchStatus.dropped
+              ? WatchStatus.dropped
+              : WatchStatus.watching
+        : current.status == WatchStatus.dropped
+        ? WatchStatus.dropped
+        : WatchStatus.planned;
+    items = items
+        .map(
+          (candidate) => candidate.id == item.id
+              ? current.copyWith(
+                  status: status,
+                  watchedEpisodeCount: count,
+                  watchedMinutes: count * item.episodeRuntimeMinutes,
+                )
+              : candidate,
+        )
+        .toList();
+    return numbers.length;
+  }
 }
 
 Iterable<(int, int)> _episodeCoordinates(MediaItem item) sync* {
@@ -1181,6 +1303,20 @@ Iterable<(int, int)> _episodeCoordinates(MediaItem item) sync* {
   for (var episode = 1; episode <= item.episodeCount; episode++) {
     yield (0, episode);
   }
+}
+
+int _totalEpisodeCapacity(MediaItem item) => item.seasons.isNotEmpty
+    ? item.seasons.fold(0, (sum, season) => sum + season.episodeCount)
+    : item.episodeCount;
+
+(int, int) _episodeCoordinate(MediaItem item, int ordinal) {
+  if (item.seasons.isEmpty) return (0, ordinal);
+  var remaining = ordinal;
+  for (final season in item.seasons) {
+    if (remaining <= season.episodeCount) return (season.number, remaining);
+    remaining -= season.episodeCount;
+  }
+  throw RangeError('Эпизод $ordinal отсутствует.');
 }
 
 int _recommendationWeight(MediaItem item) {
